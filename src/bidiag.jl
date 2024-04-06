@@ -36,7 +36,7 @@ function _construct_callback(n, this::BidiagSys; style=:rand)
     end
     this.M = I - M
     if style == :rand
-        this.λ = Random.rand(Float64, n) / 10
+        this.λ = Random.rand(Float64, n)
         this.γ = Random.rand(Float64, n)
         this.q = Random.rand(Float64, n)
     elseif style == :full
@@ -47,8 +47,8 @@ function _construct_callback(n, this::BidiagSys; style=:rand)
         this.q[1] = 0.1
     elseif style == :fullrg
         this.γ = ones(n)
-        this.λ = Random.rand(Float64, n) / 10
-        this.q = Random.rand(Float64, n) / 10
+        this.λ = Random.rand(Float64, n)
+        this.q = Random.rand(Float64, n)
     else
         ErrorException("Unknown style: $style") |> throw
     end
