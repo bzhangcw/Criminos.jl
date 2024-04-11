@@ -45,7 +45,7 @@ style = :rand
 style_mixin = Criminos.entropy_mixin
 # style_mixin = Criminos.binary_zigzag_mixin
 style_mixin_name = style_mixin |> nameof
-bool_get_gradient_plot = false
+bool_get_gradient_plot = true
 bool_use_html = false
 
 if bool_use_html
@@ -67,13 +67,16 @@ z₀ = MarkovState(0, n)
 # z₀ = MarkovState(0, z₀.z)
 Ψ = BidiagSys(n; style=style)
 
-Z = -(rand(n, n) .* 0.2 .+ 0.6) * 5
+# asymmetric
+# Z = -(randn(n, n))
+# Z = -(rand(n, n)) .+ 0.3
 # Z = +(rand(n, n) .* 0.2 .+ 0.6) * 5
 # Z = +(randn(n, n) .* 1)
-normalize!(Z, 2)
-Z[diagind(Z)] .= 1 / sqrt(n) * 1.5 * sign.(Z[diagind(Z)])
-Z[diagind(Z)] = Z[diagind(Z)] .* (rand(n) .* 0.3 .+ 0.7)
-Z = UpperTriangular(Z)
+# Z = Z' * Z + 1e-1 * I
+# normalize!(Z, 2)
+# Z[diagind(Z)] .= 1 / sqrt(n) * 1.5 * sign.(Z[diagind(Z)])
+# Z[diagind(Z)] = Z[diagind(Z)] .* (rand(n) .* 0.3 .+ 0.7)
+# Z = UpperTriangular(Z)
 # Z = +(randn(n, n))
 # Z = -(Z' * Z / 2) / 5
 

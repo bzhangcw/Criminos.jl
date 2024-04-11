@@ -1,4 +1,5 @@
 # extras
+*.csv
 # doc
 *.xdv
 *.toc
