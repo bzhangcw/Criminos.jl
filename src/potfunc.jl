@@ -21,7 +21,7 @@ function quad_linear_old(z, z₊;
 
     _ψ = ψ(_x, _r, _Φ, _τ, A; Ψ=Ψ, baropt=baropt)
     _L = ℓ * L(_x)
-    _e = 0 # _y' * _ψ / 2 - ℓ * _y' * Ψ.Γ' * Ψ.M' * _x
+    _e = _y' * _ψ / 2 + ℓ * _y' * Ψ.Γ' * Ψ.M' * _x
     _p = baropt.μ * ((_x .+ ε)' * log.(_x .+ ε) + (_x - _y .+ ε)' * log.(_x - _y .+ ε))
     @debug "" (L(_x₊) - L(_x)) (((_x₊ - _x) |> norm)^2) _e _L
 
@@ -46,13 +46,12 @@ function quad_linear(z, z₊;
     _x₊ = _Φ * _x + Ψ.λ
     L(x) = 1 / 2 * x' * (I - Ψ.Γ) * x + x' * (Ψ.M * Ψ.Γ * _y - Ψ.λ)
 
-    _ψ = ψ(_x, _r, _Φ, _τ, A; Ψ=Ψ, baropt=baropt)
-    _L = ℓ * L(_x)
-    _e = 0 # _y' * _ψ / 2 - ℓ * _y' * Ψ.Γ' * Ψ.M' * _x
+    _L = L(_x)
+    _, _e = ψ(_x, _r, _Φ, _τ, A; Ψ=Ψ, baropt=baropt)
     _p = baropt.μ * ((_x .+ ε)' * log.(_x .+ ε) + (_x - _y .+ ε)' * log.(_x - _y .+ ε))
     @debug "" (L(_x₊) - L(_x)) (((_x₊ - _x) |> norm)^2) _e _L
 
-    return _e + _L #+ _p
+    return _L + ℓ * _e + _p
 end
 
 

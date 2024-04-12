@@ -68,8 +68,8 @@ z₀ = MarkovState(0, n)
 Ψ = BidiagSys(n; style=style)
 
 # asymmetric
-# Z = -(randn(n, n))
-# Z = -(rand(n, n)) .+ 0.3
+Z = (randn(n, n))
+# Z = -(rand(n, n))
 # Z = +(rand(n, n) .* 0.2 .+ 0.6) * 5
 # Z = +(randn(n, n) .* 1)
 # Z = Z' * Z + 1e-1 * I
@@ -86,11 +86,13 @@ Jp = z -> J(Ψ, z; ff=style_mixin, Z=Z)
 ################################################################################
 # get the fixed-point plots 
 ################################################################################
-H(z, z₊) = Criminos.quad_linear(z, z₊; Z=Z, Ψ=Ψ) - Criminos.quad_linear(z₊, z; Z=Z, Ψ=Ψ)
+H(z, z₊) = Criminos.quad_linear(z, z₊; Z=Z, Ψ=Ψ) #- Criminos.quad_linear(z₊, z; Z=Z, Ψ=Ψ)
+ΔH(z, z₊) = Criminos.quad_linear(z, z₊; Z=Z, Ψ=Ψ) - Criminos.quad_linear(z₊, z; Z=Z, Ψ=Ψ)
 metrics = Dict(
     Criminos.Lₓ => L"\|x - x^*\|",
     Criminos.Lᵨ => L"\|\rho - \rho^*\|",
-    H => L"H - H^*",
+    H => L"H",
+    ΔH => L"H - H^*",
 )
 
 kₑ, z₊, ε, traj = Criminos.simulate(
@@ -154,7 +156,7 @@ if bool_get_gradient_plot
     for _x in xbox
         for _y in ybox
             xx, pp = find_x(n, _x, _y; x0=z₀.z[1:n])
-            _z = MarkovState(0, [xx; pp])
+            _z = MarkovState(0, [xx; pp], z₀.τ)
             kₑ, z₊, ε, traj = Criminos.simulate(_z, Ψ, Fp; K=K, metrics=metrics)
             push!(runs, traj)
             pps = sum_population.(traj)

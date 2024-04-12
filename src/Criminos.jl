@@ -4,59 +4,66 @@ greet() = print("Hello World!")
 
 EPS_FP = 1e-7
 
-ℓ = 0.1
+ℓ = 1
 struct BarrierOption
     μ::Float64
 end
-default_barrier_option = BarrierOption(0.03)
+default_barrier_option = BarrierOption(0.5)
 
 include("state.jl")
 include("bidiag.jl")
 include("fixpoint.jl")
 include("mixin.jl")
-# a debugging function on φ
+include("potfunc.jl")
 
 ψ_linear(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
     _x₊ = _Φ * _x + Ψ.λ
     # pure linear function
-    return 2 * baropt.μ * (Diagonal(_τ) * A) * ones(length(_x₊))
+    _y = _x .* _r + Ψ.Q * Ψ.λ
+    ∇ = (2*A*_τ+Ψ.Q*Ψ.λ)[:]
+    E = ∇' * (_r)
+    return ∇, E
 end
+
 ψ_quadratic(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
     _x₊ = _Φ * _x + Ψ.λ
     _y₊ = _Φ * (_x .* _r) + Ψ.Q * Ψ.λ
-    _y = _x .* _r
+    _y = _x .* _r + Ψ.Q * Ψ.λ
     # nvx quadratic
     _T = Diagonal(_τ)
-    _H = A' * _T + _T * A
-    L = opnorm(_H)
-    return 1 / L / 10 * _H * _y
+    H = A' * _T + _T * A
+    L = opnorm(H)
+    ∇ = (0.24/L*H*_y)[:]
+    E = ∇' * _y / 2
+    return ∇, E
 end
 
 ψ_quadratic_cvx(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
     _x₊ = _Φ * _x + Ψ.λ
     _y₊ = _Φ * (_x .* _r) + Ψ.Q * Ψ.λ
-    _y = _x .* _r
+    _y = _x .* _r + Ψ.Q * Ψ.λ
     # nvx quadratic
     H = A' * Diagonal(_τ .^ 2) * A
     L = opnorm(H)
-    # return 1 / L * baropt.μ * (Diagonal(_τ) * A + A' * Diagonal(_τ)) * _x .* _r
-    # return 1 / L * baropt.μ * (Diagonal(_τ) * A + A' * Diagonal(_τ)) * _x .* _r
-    return 1 / 2 / L * baropt.μ / 100 * H * _y
+    ∇ = (0.24/L*H*_y)[:]
+    E = ∇' * _y / 2
+    return ∇, E
 end
 
 ψ_sublinear(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
     _x₊ = _Φ * _x + Ψ.λ
     _y₊ = _Φ * (_x .* _r) + Ψ.Q * Ψ.λ
     # quadratic
-    A = abs.(A)
-    _T = Diagonal(_τ)
-    _y = _x .* _r
-    return 1 ./ (_T * A * _y .+ 1)
+    _T = diagm(0 => _τ)
+    _y = _x .* _r + Ψ.Q * Ψ.λ
+    E(x) = 1 / ((A * _T * x) .^ 2 |> sum)
+    ∇E(x) = ForwardDiff.gradient(E, x)
+    return ∇E(_y), E(_y)
 end
-
-# ψ = ψ_quadratic_cvx
+# ψ = ψ_linear
 # ψ = ψ_quadratic
 ψ = ψ_linear
+# ψ = ψ_sublinear
 
 function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true)
 
@@ -83,7 +90,7 @@ function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=tr
         end
 
         # one-step forward
-        z₁ = MarkovState(k, Fp(z))
+        z₁ = MarkovState(k, Fp(z), z.τ)
 
         kₑ = k
         push!(traj, z)

@@ -11,14 +11,15 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
     τ::Tx               # treatment probability
 
     # use known initial condition
-    MarkovState(k, z0::Vector{Float64}) = (
+    MarkovState(k, z0::Vector{Float64}, τ::Vector{Float64}) = (
         this = new{Float64,Vector{Float64}}();
         this.k = k;
         this.z = copy(z0);
         this.n = n = length(this.z) ÷ 2;
         this.x = this.z[1:n];
         this.ρ = this.z[n+1:2n];
-        this.τ = 0.5 * ones(n);
+        this.y = this.x .* this.ρ;
+        this.τ = τ;
         return this
     )
 
@@ -28,10 +29,10 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
         this.k = k;
         this.n = n;
         this.x = Random.rand(Float64, n);
-        this.x ./= sum(this.x);
         this.ρ = Random.rand(Float64, n);
+        this.y = this.x .* this.ρ;
         this.z = [this.x; this.ρ];
-        this.τ = 0.5 * ones(n);
+        this.τ = rand(Float64, n) / 10;
         return this
     )
 end
@@ -46,4 +47,4 @@ Base.show(io::IO, ::MIME"text/plain", z::MarkovState{R,Tx}) where {R,Tx} =
     )
 
 Base.copy(z::MarkovState{R,Tx}) where {R,Tx} =
-    MarkovState(z.k, z.z)
+    MarkovState(z.k, z.z, z.τ)

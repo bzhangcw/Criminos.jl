@@ -62,7 +62,7 @@ function forward(z₀, F; K=10000, ϵ=EPS_FP)
     fp = 1e6
     for k in 1:K
 
-        z₁ = MarkovState(k, F(z))
+        z₁ = MarkovState(k, F(z), z.τ)
         fp = (z₁.z - z.z) |> norm
         if fp ≤ ϵ * (z.z |> norm)
             @printf("converged in %d iterations\n", k)
