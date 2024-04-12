@@ -8,7 +8,7 @@ EPS_FP = 1e-7
 struct BarrierOption
     μ::Float64
 end
-default_barrier_option = BarrierOption(0.5)
+default_barrier_option = BarrierOption(2)
 
 include("state.jl")
 include("bidiag.jl")
@@ -19,9 +19,9 @@ include("potfunc.jl")
 ψ_linear(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
     _x₊ = _Φ * _x + Ψ.λ
     # pure linear function
-    _y = _x .* _r + Ψ.Q * Ψ.λ
+    _y = _x .* _r #+ Ψ.Q * Ψ.λ
     ∇ = (2*A*_τ+Ψ.Q*Ψ.λ)[:]
-    E = ∇' * (_r)
+    E = ∇' * (_y)
     return ∇, E
 end
 
