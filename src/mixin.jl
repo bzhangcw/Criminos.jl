@@ -1,5 +1,3 @@
-
-
 """
     linear_mixin(Ψ::BidiagSys, z::MarkovState; α=0.1, Z=ones(n, n) * 0.1)
 
@@ -19,6 +17,7 @@ Returns:
 """
 which did nothing
 """
+
 function identity_mixin(
     z, Ψ, _Φ;
     Z=nothing,
@@ -27,20 +26,9 @@ function identity_mixin(
 )
     _x = z.z[1:z.n]
     _r = z.z[z.n+1:2z.n]
-    _τ = z.τ
-    d = _x |> length
-
-    μ = baropt.μ
-    # !!!do not modify in place
-    # if isnothing(Z)
-    #     A = LowerTriangular(rand(d, d)) * 0.9
-    # else
-    #     A = Z
-    # end
-    A = Z
     _x₊ = _Φ * _x + Ψ.λ
     _y₊ = _Φ * (_x .* _r) + Ψ.Q * Ψ.λ
-    _f2 = _y₊ / _x₊
+    _f2 = _y₊ ./ _x₊
     return _f2
 end
 
@@ -89,3 +77,5 @@ function binary_zigzag_mixin(
         return ones(_x |> length) * 0.98
     end
 end
+
+include("./mixin_gen.jl")

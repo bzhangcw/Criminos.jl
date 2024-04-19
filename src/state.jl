@@ -7,9 +7,10 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
     z::Tx               # fix-point iterate
     x::Tx               # iterate
     ρ::Tx               # probability
-    y::Tx               # auxiliary variable
+    y::Tx               # recivists
+    y₋::Tx              # previous recivists
     τ::Tx               # treatment probability
-
+    f::Real             # objective value of the mixed-in function
     # use known initial condition
     MarkovState(k, z0::Vector{Float64}, τ::Vector{Float64}) = (
         this = new{Float64,Vector{Float64}}();
@@ -19,10 +20,26 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
         this.x = this.z[1:n];
         this.ρ = this.z[n+1:2n];
         this.y = this.x .* this.ρ;
+        this.y₋ = this.x .* this.ρ;
         this.τ = τ;
+        this.f = 1e4;
         return this
     )
 
+    # use random initial condition
+    MarkovState(k, n::Int, τ::Vector{Float64}) = (
+        this = new{Float64,Vector{Float64}}();
+        this.k = k;
+        this.n = n;
+        this.x = Random.rand(Float64, n);
+        this.ρ = Random.rand(Float64, n);
+        this.y = this.x .* this.ρ;
+        this.y₋ = this.x .* this.ρ;
+        this.z = [this.x; this.ρ];
+        this.τ = τ;
+        this.f = 1e4;
+        return this
+    )
     # use random initial condition
     MarkovState(k, n::Int) = (
         this = new{Float64,Vector{Float64}}();
@@ -31,8 +48,10 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
         this.x = Random.rand(Float64, n);
         this.ρ = Random.rand(Float64, n);
         this.y = this.x .* this.ρ;
+        this.y₋ = this.x .* this.ρ;
         this.z = [this.x; this.ρ];
-        this.τ = rand(Float64, n) / 10;
+        this.τ = Random.rand(Float64, n);
+        this.f = 1e4;
         return this
     )
 end

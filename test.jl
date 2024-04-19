@@ -7,34 +7,10 @@ using JuMP
 using Criminos
 using Plots
 using Gurobi
+using ProgressMeter
 
 using CSV, Tables, DataFrames
 
-model = Model(Gurobi.Optimizer)
-set_attribute(model, "LogToConsole", 0)
-set_attribute(model, "OutputFlag", 0)
-set_attribute(model, "NonConvex", 2)
-
-function find_x(size, _x, _y; x0=nothing)
-    empty!(model)
-
-    # size = ρ |> length
-
-    _c = rand(Float64, size)
-    if x0 |> isnothing
-        @variable(model, x[1:size] .>= 0)
-    else
-        x = normalize(x0, 1)
-        x *= (_x + _y)
-    end
-    @variable(model, 1 .>= ρ[1:size] .>= 0)
-    @constraint(model, ρ' * x == _x)
-    @constraint(model, (1 .- ρ)' * x == _y)
-    @objective(model, Max, _c' * x)
-
-    optimize!(model)
-    return value.(x), value.(ρ)
-end
 ################################################################################
 # !!!todo, change to argparse
 ################################################################################
@@ -42,11 +18,15 @@ end
 # plotly()
 # style = :fullrg
 style = :rand
-style_mixin = Criminos.entropy_mixin
+# style_mixin = Criminos.identity_mixin
+style_mixin = Criminos.mixed_in_gnep_best
+# style_mixin = Criminos.mixed_in_gnep_grad
+# style_mixin = Criminos.entropy_mixin
 # style_mixin = Criminos.binary_zigzag_mixin
 style_mixin_name = style_mixin |> nameof
 bool_get_gradient_plot = true
 bool_use_html = false
+style_treatement = :none
 
 if bool_use_html
     plotly()
@@ -57,50 +37,61 @@ else
 end
 ################################################################################
 
-Random.seed!(2)
+Random.seed!(5)
 n = 8
 K = 1e3
 kk = 1
 specr(x) = maximum(abs.(eigvals(x)))
-z₀ = MarkovState(0, n)
-# z₀.z[1:n] .*= 0.5
-# z₀ = MarkovState(0, z₀.z)
+
+if style_treatement == :uniform
+    τ = ones(n) / 2
+    α₁ = α₂ = 0.2
+else
+    τ = ones(n) / 2
+    xₙ = Int(n // 2)
+    α₁ = 0.05
+    α₂ = 0.05
+    τ[1:xₙ] .= α₁
+    τ[xₙ:end] .= α₂
+end
+
+z₀ = MarkovState(0, n, τ)
 Ψ = BidiagSys(n; style=style)
 
 # asymmetric
-Z = (randn(n, n))
-# Z = -(rand(n, n))
-# Z = +(rand(n, n) .* 0.2 .+ 0.6) * 5
-# Z = +(randn(n, n) .* 1)
-# Z = Z' * Z + 1e-1 * I
-# normalize!(Z, 2)
-# Z[diagind(Z)] .= 1 / sqrt(n) * 1.5 * sign.(Z[diagind(Z)])
-# Z[diagind(Z)] = Z[diagind(Z)] .* (rand(n) .* 0.3 .+ 0.7)
-# Z = UpperTriangular(Z)
-# Z = +(randn(n, n))
-# Z = -(Z' * Z / 2) / 5
+A = (rand(n, n))
+B = (rand(n, n))
+C = Symmetric(randn(n, n))
+C = (zeros(n, n))
+C = C' * C
+C = C' * C + 100 * I
 
-Fp = z -> F(Ψ, z; ff=style_mixin, Z=Z)
-Jp = z -> J(Ψ, z; ff=style_mixin, Z=Z)
+Fp = z -> F(Ψ, z; ff=style_mixin, Z=(A, B, C))
+Jp = z -> J(Ψ, z; ff=style_mixin, Z=(A, B, C))
 
 ################################################################################
 # get the fixed-point plots 
 ################################################################################
-H(z, z₊) = Criminos.quad_linear(z, z₊; Z=Z, Ψ=Ψ) #- Criminos.quad_linear(z₊, z; Z=Z, Ψ=Ψ)
-ΔH(z, z₊) = Criminos.quad_linear(z, z₊; Z=Z, Ψ=Ψ) - Criminos.quad_linear(z₊, z; Z=Z, Ψ=Ψ)
+N(z, z₊) = Criminos.no_mixed_in(z, z₊; Z=(A, B, C), Ψ=Ψ) #- Criminos.quad_linear(z₊, z; Z=Z, Ψ=Ψ)
+H(z, z₊) = Criminos.pot_gnep(z, z₊; Z=(A, B, C), Ψ=Ψ)
+∑y(z, z₊) = Criminos.∑y(z, z₊)
 metrics = Dict(
     Criminos.Lₓ => L"\|x - x^*\|",
     Criminos.Lᵨ => L"\|\rho - \rho^*\|",
+    # ΔH => L"H - H^*",
+    # N => L"\textrm{No-Mixed-In}",
     H => L"H",
-    ΔH => L"H - H^*",
-)
+    ∑y => L"$\sum y$")
 
-kₑ, z₊, ε, traj = Criminos.simulate(
+kₑ, z₊, ε, traj, bool_opt = Criminos.simulate(
     z₀, Ψ, Fp; K=K,
     metrics=metrics
 )
 
-rg = 1:kₑ
+
+# dx, dy = Criminos.kkt_box_opt(z₊; Z=Z, Ψ=Ψ)
+
+rg = 2:kₑ
 
 fig = plot(
     size=(700, 500),
@@ -123,20 +114,6 @@ savefig(fig, "/tmp/$(style)-$(style_mixin_name)-convergence.$format")
 @info "write to" "/tmp/$(style)-$(style_mixin_name)-convergence.$format"
 
 
-################################################################################
-# the entropy potential
-################################################################################
-# function entropy_mixin_potential(x, ρ, τ)
-#     A = LowerTriangular(Z)
-#     μ = 0.1
-#     _Φ = Ψ.Γ - Ψ.M * Ψ.Γ * Diagonal(ρ)
-#     y = x .* ρ
-#     _x₊ = _Φ * x + Ψ.λ
-#     _y₊ = _Φ * y + Ψ.Q * Ψ.λ
-#     φ(x, ρ) = -4 * μ * (τ) .* (A * ρ)
-#     return
-# end
-
 
 if bool_get_gradient_plot
     ################################################################################
@@ -148,81 +125,109 @@ if bool_get_gradient_plot
     radius = 2
     xbox = [-x₊:x₊/5:x₊*radius...] .+ x₊
     ybox = [-y₊:y₊/5:y₊*radius...] .+ y₊
+    totalsize = length(xbox)
     xbox = xbox[xbox.>0]
     ybox = ybox[ybox.>0]
 
-    runs = []
-    pops = []
+    runs = Dict()
+    pops = Dict()
+    model = Criminos.default_xinit_option.model
+    p = Progress(totalsize * (length(ybox)); showspeed=true)
     for _x in xbox
         for _y in ybox
-            xx, pp = find_x(n, _x, _y; x0=z₀.z[1:n])
+            xx, pp = Criminos.find_x(n, _x, _y; x0=z₀.z[1:n])
+            if (pp .- 1 |> maximum) > 1e-4
+                @warn "skip invalid value"
+                continue
+            end
             _z = MarkovState(0, [xx; pp], z₀.τ)
-            kₑ, z₊, ε, traj = Criminos.simulate(_z, Ψ, Fp; K=K, metrics=metrics)
-            push!(runs, traj)
-            pps = sum_population.(traj)
-            push!(pops, pps)
+            kₑ, z₊, ε, traj, bool_opt = Criminos.simulate(_z, Ψ, Fp; K=K, metrics=metrics)
+            if bool_opt
+                # only save optimal ones
+                pps = sum_population.(traj)
+                key = tuple(round.(pps[end]; digits=2)...)
+                println(key, "\t", length(traj))
+                if key in keys(runs)
+                    push!(runs[key], traj)
+                    push!(pops[key], pps)
+                else
+                    runs[key] = [traj]
+                    pops[key] = [pps]
+                end
+            end
+            ProgressMeter.next!(p)
         end
     end
 
     ################################################################################
     # summarize the equilibrium
     ################################################################################
-    ends = map((x) -> round.(x; digits=2), last.(pops))
-    equilibriums = unique(ends)
+    equilibriums = unique(keys(pops))
     @info "\n" "Equilibriums: $equilibriums" "size: $(length(equilibriums))"
 
     ################################################################################
     # get the quiver plot
     ################################################################################
+    zq = nothing
     if style ∉ [:none]
         cc = [0 0 0 0]
         warmup = 3
-        fig3 = plot()
-        for idt in 1:10:length(pops)
-            global cc
-            data = hcat(pops[idt]...)
-            # quiver!(
-            #     data[1, warmup:end], data[2, warmup:end],
-            #     quiver=(
-            #         data[1, warmup+1:end] / 10 - data[1, warmup:end-1] / 10,
-            #         data[2, warmup+1:end] / 10 - data[2, warmup:end-1] / 10
-            #     ),
-            x, y = data[1, warmup:end][1:end], data[2, warmup:end][1:end]
-            plot!(
-                x, y,
-                # data[warmup:end, warmup:end], data[warmup:end, warmup:end],
-                size=(900, 600),
-                labelfontsize=14,
-                xtickfont=font(13),
-                ytickfont=font(13),
-                legendfontsize=14,
-                titlefontsize=22,
-                label="$idt",
-                arrow=true,
-                hovers=1:length(x),
-                dpi=1000
-            )
-            # annotate!(
-            #     [(data[1, 1], data[2, 1], ("0", 8, 45.0, :bottom, :black))],
-            # )
-
-            u = data[1, warmup+1:end] - data[1, warmup:end-1]
-            v = data[2, warmup+1:end] - data[2, warmup:end-1]
-            # if warmup == 1
-            cc = [cc; data[1, warmup:end-1] data[2, warmup:end-1] u v]
-
-            # write out a DataFrame to csv file
-            df = DataFrame(cc[2:end, :], :auto)
-            CSV.write("$(style)-$(style_mixin_name)-data.csv", df)
-        end
-        annotate!(
-            [(x₊, y₊, ("*", 8, 45.0, :bottom, :black))],
+        fig3 = plot(
+            title=L"Trajectories: $\alpha_\ell$: %$α₁ $\alpha_h$: %$α₂",
+            legend=false
         )
+        for (key, trajs) in pops
+            ub = min(10, length(trajs))
+            for idt in shuffle(1:length(trajs))[1:ub]
+                global cc, zq
+                data = hcat(trajs[idt]...)
+                # quiver!(
+                #     data[1, warmup:end], data[2, warmup:end],
+                #     quiver=(
+                #         data[1, warmup+1:end] / 10 - data[1, warmup:end-1] / 10,
+                #         data[2, warmup+1:end] / 10 - data[2, warmup:end-1] / 10
+                #     ),
+                x, y = data[1, warmup:end][1:end], data[2, warmup:end][1:end]
+                plot!(
+                    x, y,
+                    # data[warmup:end, warmup:end], data[warmup:end, warmup:end],
+                    size=(900, 600),
+                    labelfontsize=18,
+                    xtickfont=font(15),
+                    ytickfont=font(15),
+                    legendfontsize=14,
+                    titlefontsize=22,
+                    xlabel="recidivists",
+                    ylabel="non-recidivists",
+                    arrow=true,
+                    linealpha=0.8,
+                    dpi=1000
+                )
+                # annotate!(
+                #     [(data[1, 1], data[2, 1], ("0", 8, 45.0, :bottom, :black))],
+                # )
+
+                u = data[1, warmup+1:end] - data[1, warmup:end-1]
+                v = data[2, warmup+1:end] - data[2, warmup:end-1]
+                # if warmup == 1
+                cc = [cc; data[1, warmup:end-1] data[2, warmup:end-1] u v]
+
+                # write out a DataFrame to csv file
+                df = DataFrame(cc[2:end, :], :auto)
+                CSV.write("$(style)-$(style_mixin_name)-data.csv", df)
+            end
+            annotate!(
+                [(trajs[1][end][1], trajs[1][end][2], (L"$\odot$", 22, 45.0, :center, :black)),
+                (trajs[1][end][1], trajs[1][end][2], (L"%$key", 22, 1.0, :right, :black))
+            ],
+            )
+        end
         plot!(showlegend=true)
         @info "Writing out $(style)-$(style_mixin_name)-data.csv"
         # savefig(fig3, "/tmp/quiver.png")
         # savefig(fig3, "/tmp/quiver.pdf")
         savefig(fig3, "/tmp/$(style)-$(style_mixin_name)-quiver.$format")
+        run(`cp /tmp/$(style)-$(style_mixin_name)-quiver.$format /tmp/$α₁-$α₂.$format`)
 
 
     end

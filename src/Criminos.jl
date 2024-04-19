@@ -1,85 +1,85 @@
 module Criminos
 
+using JuMP, Gurobi
 greet() = print("Hello World!")
 
-EPS_FP = 1e-7
+EPS_FP = 1e-8
 
 ℓ = 1
 struct BarrierOption
     μ::Float64
 end
-default_barrier_option = BarrierOption(0.5)
+mutable struct GNEPMixinOption
+    y::Union{Nothing,Any}
+    is_setup::Bool
+    model::Union{Nothing,Model}
+end
+mutable struct XInitHelper
+    x::Union{Nothing,Any}
+    ρ::Union{Nothing,Any}
+    is_setup::Bool
+    model::Union{Nothing,Model}
+    c1::Union{Nothing,Any}
+    c2::Union{Nothing,Any}
+end
+
+const GRB_ENV = Ref{Gurobi.Env}()
+default_gnep_mixin_option = Ref{GNEPMixinOption}()
+default_xinit_option = Ref{XInitHelper}()
+default_barrier_option = BarrierOption(0.01)
+function __init__()
+    global default_gnep_mixin_option, default_xinit_option
+    GRB_ENV[] = Gurobi.Env()
+    default_gnep_mixin_option = GNEPMixinOption(
+        nothing,
+        false,
+        Model(optimizer_with_attributes(
+            () -> Gurobi.Optimizer(GRB_ENV[]),
+            "NonConvex" => 2,
+            "LogToConsole" => 0,
+            "LogFile" => "grb.criminos.log"
+        ))
+    )
+    default_xinit_option = XInitHelper(
+        nothing,
+        nothing,
+        false,
+        Model(optimizer_with_attributes(
+            () -> Gurobi.Optimizer(GRB_ENV[]),
+            "NonConvex" => 2,
+            "LogToConsole" => 0,
+            "LogFile" => "grb.criminos.findx.log"
+        )),
+        nothing,
+        nothing
+    )
+end
+
+export default_barrier_option, default_gnep_mixin_option, default_xinit_option
+
+##################################################
+# sigfault when using constant env here.
+# const GRB_ENV = Ref{Gurobi.Env}()
+# GRB_ENV[] = Gurobi.Env()
+##################################################
 
 include("state.jl")
 include("bidiag.jl")
 include("fixpoint.jl")
 include("mixin.jl")
 include("potfunc.jl")
+include("tools.jl")
+export find_x
 
-ψ_linear(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
-    _x₊ = _Φ * _x + Ψ.λ
-    # pure linear function
-    _y = _x .* _r + Ψ.Q * Ψ.λ
-    ∇ = (2*A*_τ+Ψ.Q*Ψ.λ)[:]
-    E = ∇' * (_r)
-    return ∇, E
-end
 
-ψ_quadratic(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
-    _x₊ = _Φ * _x + Ψ.λ
-    _y₊ = _Φ * (_x .* _r) + Ψ.Q * Ψ.λ
-    _y = _x .* _r + Ψ.Q * Ψ.λ
-    # nvx quadratic
-    _T = Diagonal(_τ)
-    H = A' * _T + _T * A
-    L = opnorm(H)
-    ∇ = (0.24/L*H*_y)[:]
-    E = ∇' * _y / 2
-    return ∇, E
-end
-
-ψ_quadratic_cvx(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
-    _x₊ = _Φ * _x + Ψ.λ
-    _y₊ = _Φ * (_x .* _r) + Ψ.Q * Ψ.λ
-    _y = _x .* _r + Ψ.Q * Ψ.λ
-    # nvx quadratic
-    H = A' * Diagonal(_τ .^ 2) * A
-    L = opnorm(H)
-    ∇ = (0.24/L*H*_y)[:]
-    E = ∇' * _y / 2
-    return ∇, E
-end
-
-ψ_sublinear(_x, _r, _Φ, _τ, A; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
-    _x₊ = _Φ * _x + Ψ.λ
-    _y₊ = _Φ * (_x .* _r) + Ψ.Q * Ψ.λ
-    # quadratic
-    _T = diagm(0 => _τ)
-    _y = _x .* _r + Ψ.Q * Ψ.λ
-    E(x) = 1 / ((A * _T * x) .^ 2 |> sum)
-    ∇E(x) = ForwardDiff.gradient(E, x)
-    return ∇E(_y), E(_y)
-end
-# ψ = ψ_linear
-# ψ = ψ_quadratic
-ψ = ψ_linear
-# ψ = ψ_sublinear
 
 function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true)
 
-    z₊ = Criminos.forward(z₀, Fp; K=K)
+    z₊, bool_opt = Criminos.forward(z₀, Fp; K=K)
     ε = Dict()
     for (idx, (func, fname)) in enumerate(metrics)
         ε[fname] = zeros(z₊.k + 1)
     end
-
-    # @printf(
-    #     # "%3s | %31s | %7s | %4s | %4s | %4s | %4s   \n",
-    #     "%3s | %7s | %7s | %4s | %4s | %4s | %4s   \n",
-    #     "k",
-    #     # "jac diff (ad/analytical)",
-    #     "ε₁", "ε₂", "ρ(Φ)", "|Φ|", "ρ(J)", "|J|",
-    # )
 
     z = copy(z₀)
     traj = [z]
@@ -88,9 +88,12 @@ function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=tr
         for (idx, (func, fname)) in enumerate(metrics)
             ε[fname][k] = func(z, z₊)
         end
-
-        # one-step forward
+        # move to next iterate
         z₁ = MarkovState(k, Fp(z), z.τ)
+        # assign mixed-in function value
+        z₁.f = z.f
+        # copy previous recidivists
+        z₁.y₋ = copy(z.y)
 
         kₑ = k
         push!(traj, z)
@@ -101,7 +104,7 @@ function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=tr
 
         z = z₁
     end
-    return kₑ, z₊, ε, traj
+    return kₑ, z₊, ε, traj, bool_opt
 end
 
 

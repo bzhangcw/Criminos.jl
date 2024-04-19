@@ -54,6 +54,30 @@ function quad_linear(z, z₊;
     return _L + ℓ * _e + _p
 end
 
+function no_mixed_in(z, z₊;
+    baropt=default_barrier_option,
+    Z=nothing,
+    Ψ=nothing
+)
+    # do not modify in place
+    A = Z
+
+    _τ = z.τ
+    _x = z.x
+    _r = z.ρ
+    _y = _x .* _r
+    ε = 1e-3
+    Z = Ψ.M * Ψ.Γ * Diagonal(_y)
+    e = ones(_x |> length)
+
+    L(x) = 1 / 2 * x' * (I - Ψ.Γ) * x + x' * (Z * e - Ψ.λ)
+    Y(y) = 1 / 2 * y' * (I - Ψ.Γ) * y + y' * (Z * _r - Ψ.Q * Ψ.λ)
+    # Y(y) = 1 / 2 * y' * (I - Ψ.Γ) * y + y' * (Z * _r - _r .* Ψ.λ)
+    _p = 1e3 * norm(Ψ.M * Ψ.Γ * Diagonal(_y) - Z)^2
+
+    return L(_x) + Y(_y) + _p
+end
+
 
 ############################################
 # ordinary potential functions
@@ -72,4 +96,10 @@ function Lₓ(z, z₊; p=1)
     _x₊ = z₊.x
     _r₊ = z₊.ρ
     return LinearAlgebra.norm(_x - _x₊, p) + 1e-9
+end
+
+function ∑y(z, z₊; p=1)
+    _x = z.x
+    _r = z.ρ
+    return sum(_x .* _r)
 end
