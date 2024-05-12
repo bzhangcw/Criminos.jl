@@ -23,11 +23,11 @@ L(x, Ψ) = 1 / 2 * x' * (I - Ψ.Γ) * x - x' * Ψ.λ
 # u₂(x) without externality
 # linear quadratic function
 function w_linearquad(
-    y, _τ, Z;
+    y, _τ, args;
     Ψ=nothing, baropt=default_barrier_option,
     kwargs...
 )
-    ∇₀, H₀, ∇ₜ, Hₜ, _... = Z
+    ∇₀, H₀, ∇ₜ, Hₜ, _... = args
     _c = Ψ.Q * Ψ.λ
 
     Cₜ = diagm(_τ) * Hₜ * diagm(_τ) + H₀
@@ -50,7 +50,7 @@ w = w_linearquad
 function mixed_in_gnep_best(
     z, Ψ, _Φ;
     α=0.1,
-    Z=nothing,
+    args=nothing,
     baropt=default_barrier_option,
     kwargs...
 )
@@ -71,7 +71,7 @@ function mixed_in_gnep_best(
     # constraints for y
     set_upper_bound.(y, _x₊)
     ##################################################
-    _w, ∇, ∇² = w(y, _τ, Z; Ψ=Ψ, baropt=baropt)
+    _w, ∇, ∇² = w(y, _τ, args; Ψ=Ψ, baropt=baropt)
     # add cross term: the externality term
     _φ = y' * Ψ.Γ' * Ψ.M' * _x₊
     # add proximal term
@@ -104,7 +104,7 @@ end
 function mixed_in_gnep_grad(
     z, Ψ, _Φ;
     α=0.1,
-    Z=nothing,
+    args=nothing,
     baropt=default_barrier_option,
     kwargs...
 )
@@ -118,7 +118,7 @@ function mixed_in_gnep_grad(
 
     z.f = 0.0 # unused
     # we let y proceed a gradient step
-    _ψ, _ = ψ(_x₊, _r, _Φ, _τ, Z; Ψ=Ψ, baropt=baropt)
+    _ψ, _ = ψ(_x₊, _r, _Φ, _τ, args; Ψ=Ψ, baropt=baropt)
     # add cross term
     _φ = _ψ + Ψ.Γ' * Ψ.M' * _x₊
     u(y) = _φ' * y + dist(y, _y) / baropt.μ + y' * diagm(_τ) * C * diagm(_τ) * y / 2
@@ -142,7 +142,7 @@ end
 
 function pot_gnep(z, z₊;
     baropt=default_barrier_option,
-    Z=nothing,
+    args=nothing,
     Ψ=nothing
 )
     _τ = z.τ
@@ -151,7 +151,7 @@ function pot_gnep(z, z₊;
     _y = _x .* _r
 
     _L = L(_x, Ψ)
-    _w, ∇, ∇² = w(_y, _τ, Z; Ψ=Ψ, baropt=baropt)
+    _w, ∇, ∇² = w(_y, _τ, args; Ψ=Ψ, baropt=baropt)
     _φ = _y' * Ψ.Γ' * Ψ.M' * _x
     return _L + _φ + dist(_y, z.y₋) / baropt.μ + _w
 end
@@ -160,7 +160,7 @@ end
 # verify KKT
 function kkt_box_opt(z;
     baropt=default_barrier_option,
-    Z=nothing,
+    args=nothing,
     Ψ=nothing
 )
 
@@ -169,7 +169,7 @@ function kkt_box_opt(z;
     _r = z.ρ
     _y = _x .* _r
 
-    _w, ∇, ∇² = w(_y, _τ, Z; Ψ=Ψ, baropt=baropt)
+    _w, ∇, ∇² = w(_y, _τ, args; Ψ=Ψ, baropt=baropt)
     dx = (I - Ψ.Γ) * _x + Ψ.M * Ψ.Γ * _y - Ψ.λ
     dy = ∇ + Ψ.Γ' * Ψ.M' * _x
     v₊ = max.(0, -dy)

@@ -70,15 +70,15 @@ if bool_init
     else
         throw(ErrorException("not implemented"))
     end
-    Fp = z -> F(Ψ, z; ff=style_mixin, Z=Ω)
-    Jp = z -> J(Ψ, z; ff=style_mixin, Z=Ω)
+    Fp = z -> F(Ψ, z; fₘ=style_mixin, margs=Ω)
+    Jp = z -> J(Ψ, z; fₘ=style_mixin, margs=Ω)
 
 
     ################################################################################
     # get the fixed-point plots 
     ################################################################################
-    N(z, z₊) = Criminos.no_mixed_in(z, z₊; Z=Ω, Ψ=Ψ) #- Criminos.quad_linear(z₊, z; Z=Z, Ψ=Ψ)
-    H(z, z₊) = Criminos.pot_gnep(z, z₊; Z=Ω, Ψ=Ψ)
+    N(z, z₊) = Criminos.no_mixed_in(z, z₊; args=Ω, Ψ=Ψ)
+    H(z, z₊) = Criminos.pot_gnep(z, z₊; args=Ω, Ψ=Ψ)
     ∑y(z, z₊) = Criminos.∑y(z, z₊)
     zᵦ = MarkovState(0, [rand(n); rand(n)], ones(n) / 2)
 

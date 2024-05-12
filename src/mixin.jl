@@ -4,7 +4,7 @@
 
 function identity_mixin(
     z, Ψ, _Φ;
-    Z=nothing,
+    args=nothing,
     baropt=default_barrier_option,
     kwargs...
 )
@@ -22,7 +22,7 @@ end
 """
 function binary_zigzag_mixin(
     z, Ψ, _Φ;
-    α=0.1, Z=nothing, kwargs...
+    α=0.1, args=nothing, kwargs...
 )
     _x = z.z[1:z.n]
     _r = z.z[z.n+1:2z.n]

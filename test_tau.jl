@@ -130,18 +130,18 @@ if bool_plot_surface
         ),
         aspect_ratio=0.9
     )
-    for (idf, (k, ff)) in enumerate(surface_metrics)
-        contourfz = [[a, b, ff(runs[(a, b)][1][end])] for a in ℓ, b in h]
+    for (idf, (k, fₘ)) in enumerate(surface_metrics)
+        contourfz = [[a, b, fₘ(runs[(a, b)][1][end])] for a in ℓ, b in h]
         if bool_use_html
 
-            contour!(ℓ, h, (x, y) -> ff(runs[(x, y)][1][end]),
+            contour!(ℓ, h, (x, y) -> fₘ(runs[(x, y)][1][end]),
                 fill=true, c=reverse(cgrad(:ice)),
                 subplot=idf, title=surface_names[k],
                 figsize=(1800, 600),
             )
         else
             contourfz = hcat(contourfz...)
-            contour!(ℓ, h, (x, y) -> ff(runs[(x, y)][1][end]),
+            contour!(ℓ, h, (x, y) -> fₘ(runs[(x, y)][1][end]),
                 fill=true, levels=100, c=reverse(cgrad(:ice)),
                 subplot=idf, title=surface_names[k]
             )

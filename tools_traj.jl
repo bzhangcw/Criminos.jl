@@ -7,7 +7,6 @@ warmup = 1
 fig3 = plot(
     legend=:outerright,
     legendfonthalign=:left,
-    legendtitle="treatment ratio of lower group",
     xscale=:log2,
     yscale=:log2,
     title="Trajectory by $style_correlation-$(nameof(style_correlation_seed))",
@@ -42,8 +41,7 @@ for (neidx, (key, trajs)) in enumerate(pops)
             arrow=true,
             linealpha=0.8,
             dpi=1000,
-            # linecolor=color,
-            label="iterates",
+            label=(@sprintf "%s" key),
             hovers="",
         )
         bool_to_label = false
