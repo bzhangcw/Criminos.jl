@@ -3,7 +3,7 @@ module Criminos
 using JuMP, Gurobi
 greet() = print("Hello World!")
 
-EPS_FP = 1e-8
+EPS_FP = 1e-5
 
 ℓ = 1
 struct BarrierOption
@@ -36,8 +36,7 @@ function __init__()
         Model(optimizer_with_attributes(
             () -> Gurobi.Optimizer(GRB_ENV[]),
             "NonConvex" => 2,
-            "LogToConsole" => 0,
-            "LogFile" => "grb.criminos.log"
+            "LogToConsole" => 0
         ))
     )
     default_xinit_option = XInitHelper(

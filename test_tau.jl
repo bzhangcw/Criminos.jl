@@ -1,0 +1,153 @@
+using ForwardDiff
+using LinearAlgebra
+using Random
+using Printf
+using LaTeXStrings
+using JuMP
+using Criminos
+using Plots
+using Gurobi
+using ProgressMeter
+using ColorSchemes
+
+using CSV, Tables, DataFrames
+
+
+
+################################################################################
+include("./conf.jl")
+include("./tools.jl")
+
+
+series_color = palette(:default)
+series_size = length(series_color)
+
+
+if bool_compute
+    # store the runs by equilibrium
+    runs = Dict()
+    pops = Dict()
+    runs_same_α = Dict()
+    sum_population(z) = [z.x'z.ρ; z.x' * (-z.ρ .+ 1)]
+    ℓ = [0.05:0.05:0.95...]
+    h = [0.05:0.05:0.95...]
+    totalsize = length(ℓ) * length(h)
+    model = Criminos.default_xinit_option.model
+    p = Progress(totalsize; showspeed=true)
+    for α₁ in ℓ
+        for α₂ in h
+            τ = ones(n) / 2
+            xₙ = Int(n // 2)
+            τ[1:xₙ] .= α₁
+            τ[xₙ:end] .= α₂
+            _z = MarkovState(0, [rand(n) .* rand(Float64) * 2; rand(n)], τ)
+            kₑ, z₊, ε, traj, bool_opt = Criminos.simulate(_z, Ψ, Fp; K=K, metrics=metrics)
+            if !bool_opt
+                @warn "not converged" α₁ α₂
+                # continue
+            end
+            # only save converged ones
+            pps = sum_population.(traj)
+            key = tuple(
+                α₁, α₂,
+            )
+            println(key, "\t", length(traj))
+            if key in keys(runs)
+                push!(runs[key], traj)
+                push!(pops[key], pps)
+            else
+                runs[key] = [traj]
+                pops[key] = [pps]
+            end
+            # group same α₁
+            if α₁ in keys(runs_same_α)
+                push!(runs_same_α[α₁], [pps[end]..., α₂])
+            else
+                runs_same_α[α₁] = [[pps[end]..., α₂]]
+            end
+
+            ProgressMeter.next!(p)
+        end
+    end
+end
+
+if bool_plot_trajectory && bool_use_html
+    include("tools_traj.jl")
+    for (neidx, (key, trajs)) in enumerate(runs_same_α)
+        data = hcat(trajs...)
+        x, y, α₂ = data[1, :], data[2, :], data[3, :]
+        kk = key
+        indx = indexin(kk, ℓ)[]
+        color = indx == 0 ? :black : series_color[indx%series_size+1]
+        plot!(
+            fig3,
+            x, y,
+            markershape=:circle,
+            markeralpha=1.0,
+            markercolor=color,
+            markerstrokecolor=:match,
+            linecolor=color,
+            label="$kk",
+            arrow=true,
+            arrowhead=4,
+            linewidth=4,
+            hovers=string.(α₂),
+        )
+    end
+
+    savefig(fig3, "result/$style_correlation-$(nameof(style_correlation_seed))-quiver.$format")
+
+end
+
+if bool_plot_surface
+    @info "Plotting the surface"
+    surface_metrics = (
+        "clean rate" => (z) -> sum(z.x - z.y) / sum(z.x),
+        "population size" => (z) -> sum(z.x)
+    )
+
+    surface_names = Dict(
+        "clean rate" => L"\text{clean rate}: \sum_j(x_j-y_j)/\sum x_j",
+        "population size" => L"\text{population size}: \sum x_j"
+    )
+
+    lay = @layout [
+        a{0.8h} b{0.8h}
+    ]
+
+
+    fig4 = plot(
+        legend=true,
+        leg=:topright,
+        dpi=1000,
+        size=(800, 400),
+        legendfonthalign=:left,
+        xlabel=L"\tau_\ell",
+        ylabel=L"\tau_h",
+        layout=length(surface_metrics),
+        extra_plot_kwargs=KW(
+            :include_mathjax => "cdn",
+        ),
+        aspect_ratio=0.9
+    )
+    for (idf, (k, ff)) in enumerate(surface_metrics)
+        contourfz = [[a, b, ff(runs[(a, b)][1][end])] for a in ℓ, b in h]
+        if bool_use_html
+
+            contour!(ℓ, h, (x, y) -> ff(runs[(x, y)][1][end]),
+                fill=true, c=reverse(cgrad(:ice)),
+                subplot=idf, title=surface_names[k],
+                figsize=(1800, 600),
+            )
+        else
+            contourfz = hcat(contourfz...)
+            contour!(ℓ, h, (x, y) -> ff(runs[(x, y)][1][end]),
+                fill=true, levels=100, c=reverse(cgrad(:ice)),
+                subplot=idf, title=surface_names[k]
+            )
+        end
+        df = DataFrame(hcat(contourfz...)', :auto)
+        CSV.write("$(style)-$(style_mixin_name)-contour-$(k).csv", df)
+    end
+    savefig(fig4, "result/$style_correlation-$(nameof(style_correlation_seed))-contour.$format")
+end

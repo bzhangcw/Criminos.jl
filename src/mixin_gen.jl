@@ -1,6 +1,6 @@
-"""
-Mixed-in Functions using GNEP and GPG
-"""
+################################################################################
+# Mixed-in Functions using GNEP and GPG dynamics
+################################################################################
 
 using JuMP, Gurobi
 using ForwardDiff
@@ -14,19 +14,31 @@ _dist_kl(x, y) = sum(x .* log.(x ./ y))
 
 dist = _dist_quad
 ∇P(x, y) = ForwardDiff.gradient((x) => dist(x, y), x)
+
 ################################################################################
-
-
-# pure linear function
-ψ_linearquad(_x, _r, _Φ, _τ, Z; Ψ=nothing, baropt=default_barrier_option, kwargs...) = begin
-    _y = _x .* _r
+# UTILITY FUNCTIONS
+################################################################################
+# u₁(x) without externality
+L(x, Ψ) = 1 / 2 * x' * (I - Ψ.Γ) * x - x' * Ψ.λ
+# u₂(x) without externality
+# linear quadratic function
+function w_linearquad(
+    y, _τ, Z;
+    Ψ=nothing, baropt=default_barrier_option,
+    kwargs...
+)
+    ∇₀, H₀, ∇ₜ, Hₜ, _... = Z
     _c = Ψ.Q * Ψ.λ
-    A, B, _... = Z
 
-    ∇ = -(A*_τ)[:] - (B*_c)[:]
-    return ∇, 0.0
+    Cₜ = diagm(_τ) * Hₜ * diagm(_τ) + H₀
+    _w = (
+        y' * Cₜ * y / 2 +    # second-order
+        y' * ((∇ₜ*_τ)[:] - (∇₀*_c)[:])               # first-order
+    )
+    ∇ = Cₜ * y + ((∇ₜ*_τ)[:] - (∇₀*_c)[:])
+    return _w, ∇, 0.0
 end
-ψ = ψ_linearquad
+w = w_linearquad
 
 
 @doc raw"""
@@ -42,12 +54,11 @@ function mixed_in_gnep_best(
     baropt=default_barrier_option,
     kwargs...
 )
-    A, B, C, _... = Z
     _x = z.z[1:z.n]
     _r = z.z[z.n+1:2z.n]
     _τ = z.τ
     _y = _x .* _r
-    d = _x |> length
+    d = _x |> length # problem dimension
     _x₊ = _Φ * _x + Ψ.λ
     model = default_gnep_mixin_option.model
     if default_gnep_mixin_option.is_setup == false
@@ -60,11 +71,11 @@ function mixed_in_gnep_best(
     # constraints for y
     set_upper_bound.(y, _x₊)
     ##################################################
-    _ψ, _ = ψ(_x₊, _r, _Φ, _τ, Z; Ψ=Ψ, baropt=baropt)
-    # add cross term
-    _φ = _ψ + Ψ.Γ' * Ψ.M' * _x₊
+    _w, ∇, ∇² = w(y, _τ, Z; Ψ=Ψ, baropt=baropt)
+    # add cross term: the externality term
+    _φ = y' * Ψ.Γ' * Ψ.M' * _x₊
     # add proximal term
-    _f_expr = _φ' * y + dist(y, _y) / baropt.μ + y' * diagm(_τ) * C * diagm(_τ) * y / 2
+    _f_expr = _φ + dist(y, _y) / baropt.μ + _w
     @objective(model, Min, _f_expr)
     ##################################################
     optimize!(model)
@@ -97,7 +108,7 @@ function mixed_in_gnep_grad(
     baropt=default_barrier_option,
     kwargs...
 )
-    A, B, C, _... = Z
+    throw(ErrorException("not implemented correctly"))
     _x = z.z[1:z.n]
     _r = z.z[z.n+1:2z.n]
     _τ = z.τ
@@ -134,19 +145,15 @@ function pot_gnep(z, z₊;
     Z=nothing,
     Ψ=nothing
 )
-    A, B, C, _... = Z
     _τ = z.τ
     _x = z.x
     _r = z.ρ
     _y = _x .* _r
 
-    _Φ = Ψ.Γ - Ψ.M * Ψ.Γ * Diagonal(_r)
-    L(x) = 1 / 2 * x' * (I - Ψ.Γ) * x - x' * Ψ.λ
-
-    _ψ, _e = ψ(_x, _r, _Φ, _τ, Z; Ψ=Ψ, baropt=baropt)
-    _φ = _ψ + Ψ.Γ' * Ψ.M' * _x
-    # return L(_x) + _e
-    return L(_x) + _φ' * _y + dist(_y, z.y₋) / baropt.μ + _y' * diagm(_τ) * C * diagm(_τ) * _y / 2
+    _L = L(_x, Ψ)
+    _w, ∇, ∇² = w(_y, _τ, Z; Ψ=Ψ, baropt=baropt)
+    _φ = _y' * Ψ.Γ' * Ψ.M' * _x
+    return _L + _φ + dist(_y, z.y₋) / baropt.μ + _w
 end
 
 
@@ -162,16 +169,14 @@ function kkt_box_opt(z;
     _r = z.ρ
     _y = _x .* _r
 
+    _w, ∇, ∇² = w(_y, _τ, Z; Ψ=Ψ, baropt=baropt)
+    dx = (I - Ψ.Γ) * _x + Ψ.M * Ψ.Γ * _y - Ψ.λ
+    dy = ∇ + Ψ.Γ' * Ψ.M' * _x
+    v₊ = max.(0, -dy)
+    v₋ = max.(0, dy)
+    complementary = norm((_x - _y) .* v₊) + norm((_y) .* v₋)
 
-    _Φ = Ψ.Γ - Ψ.M * Ψ.Γ * Diagonal(_r)
+    @info "KKT\n" dx |> norm dy |> norm complementary
 
-    Z = Ψ.M * Ψ.Γ * Diagonal(_y)
-    e = ones(_x |> length)
-
-    _ψ, _e = ψ(_x, _r, _Φ, _τ, Z; Ψ=Ψ, baropt=baropt)
-    dy = _ψ #+ Ψ.Γ' * Ψ.M' * _x
-    dx = (I - Ψ.Γ) * _x + (Z * e - Ψ.λ)
-    @info "KKT\n" dx |> norm [dy _y _x ((_x - _y) .* (dy .<= 0) + (_y .* (dy .>= 0)))]
-
-    return dx, dy
+    return dx, dy, v₊, v₋, Ψ.Γ' * Ψ.M' * _x
 end
