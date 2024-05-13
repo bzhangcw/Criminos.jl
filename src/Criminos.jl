@@ -68,6 +68,8 @@ include("fixpoint.jl")
 include("mixin.jl")
 include("potfunc.jl")
 include("tools.jl")
+include("decision.jl")
+
 export find_x
 
 
@@ -88,7 +90,8 @@ function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=tr
             ε[fname][k] = func(z, z₊)
         end
         # move to next iterate
-        z₁ = MarkovState(k, Fp(z), z.τ)
+        _z, _τ = Fp(z)
+        z₁ = MarkovState(k, _z, _τ)
         # assign mixed-in function value
         z₁.f = z.f
         # copy previous recidivists

@@ -2,7 +2,7 @@
 # A few vanilla Mixed-in Functions 
 ################################################################################
 
-function identity_mixin(
+function mixed_in_identity(
     z, Ψ, _Φ;
     args=nothing,
     baropt=default_barrier_option,
@@ -20,7 +20,7 @@ end
     A 0-1 mixed-in to verify convergence of $X$ without $\rho$
     this only works with $\gamma < 1$
 """
-function binary_zigzag_mixin(
+function mixed_in_binary_zigzag(
     z, Ψ, _Φ;
     α=0.1, args=nothing, kwargs...
 )
@@ -34,4 +34,4 @@ function binary_zigzag_mixin(
     end
 end
 
-include("./mixin_gen.jl")
+include("./mixin_gnep.jl")

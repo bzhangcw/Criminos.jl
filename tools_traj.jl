@@ -9,7 +9,8 @@ fig3 = plot(
     legendfonthalign=:left,
     xscale=:log2,
     yscale=:log2,
-    title="Trajectory by $style_correlation-$(nameof(style_correlation_seed))",
+    size=(1800, 1200),
+    title="Trajectory by $style_name",
     extra_plot_kwargs=KW(
         :include_mathjax => "cdn",
     ),
@@ -30,7 +31,6 @@ for (neidx, (key, trajs)) in enumerate(pops)
         plot!(
             fig3,
             x, y,
-            size=(900, 600),
             labelfontsize=18,
             xtickfont=font(15),
             ytickfont=font(15),
@@ -67,6 +67,6 @@ for (neidx, (key, trajs)) in enumerate(pops)
     push!(annotated, annot)
 end
 
-@info "Writing out $style_correlation-$(nameof(style_correlation_seed))-quiver.csv"
+@info "Writing out $style_name-quiver.csv"
 
 

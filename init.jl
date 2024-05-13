@@ -36,14 +36,21 @@ function plot_convergence(traj, ε, kₑ)
         )
     end
     title!(fig, "Convergence of the metrics")
-    savefig(fig, "result/$(style_retention)-$(style_mixin_name)-convergence.$format")
+    savefig(fig, "result/$style_name-convergence.$format")
 
-    @info "write to" "result/$(style_retention)-$(style_mixin_name)-convergence.$format"
+    @info "write to" "result/$style_name-convergence.$format"
 end
 
 
 if bool_init
+    # ----------------------------------------------------------------------------
+    # decision
+    # ----------------------------------------------------------------------------
+    cₜ = rand(n) / 10
 
+    # ----------------------------------------------------------------------------
+    # mixed-in
+    # ----------------------------------------------------------------------------
     Ψ = BidiagSys(n; style=style_retention)
     Ω = nothing
     if style_correlation == :uppertriangular
@@ -51,7 +58,6 @@ if bool_init
         ∇ₜ = UpperTriangular(style_correlation_seed(n, n))
         Hₜ = Symmetric(style_correlation_seed(n, n))
         Hₜ = Hₜ' * Hₜ
-
         # this is the lower bound to
         #   guarantee the uniqueness of NE
         G = Ψ.M * Ψ.Γ
@@ -66,11 +72,13 @@ if bool_init
         G = Ψ.M * Ψ.Γ
         H₀ = style_correlation_psd ? (opnorm(G' * inv(I - Ψ.Γ) * G) + 1e-3) * I(n) : zeros(n, n)
         Ω = (∇₀, H₀, ∇ₜ, Hₜ)
-        # ∇ₜ = Diagonal(rand(n, n)) / 2
     else
         throw(ErrorException("not implemented"))
     end
-    Fp = z -> F(Ψ, z; fₘ=style_mixin, margs=Ω)
+    Fp = z -> F(Ψ, z;
+        fₘ=style_mixin, margs=Ω,
+        fₜ=style_decision, τargs=(cₜ,)
+    )
     Jp = z -> J(Ψ, z; fₘ=style_mixin, margs=Ω)
 
 

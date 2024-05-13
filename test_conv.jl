@@ -97,4 +97,4 @@ if bool_plot_trajectory && bool_use_html
     include("tools_traj.jl")
 end
 
-savefig(fig3, "result/$style_correlation-$(nameof(style_correlation_seed))-quiver.$format")
+savefig(fig3, "result/$style_name-quiver.$format")
