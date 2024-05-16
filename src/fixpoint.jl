@@ -26,7 +26,6 @@ Compute the fixed-point iteration given the BidiagSys Ψ and MarkovState z.
 function F(
     Ψ::BidiagSys, z::MarkovState;
     fₘ=Criminos.mixed_in_identity, margs=nothing, # function of mixed-in effect
-    fₜ=Criminos.decision_identity, τargs=nothing, # function of policy 
     kwargs...
 )
     _λ = Ψ.λ
@@ -35,8 +34,7 @@ function F(
     _Φ = Φ(Ψ, z)
 
     z₊ = [Fₓ(_x, _λ, _Φ); fₘ(z, Ψ, _Φ; args=margs, kwargs...)]
-    τ₊ = fₜ(z; args=τargs, kwargs...)
-    return z₊, τ₊
+    return z₊
 end
 
 function J(Ψ::BidiagSys, z::MarkovState; fₘ=Criminos.no_mixed_in, margs=nothing, kwargs...)
@@ -57,14 +55,15 @@ end
 
 
 function forward(z₀, F; K=10000, ϵ=EPS_FP)
+    @warn "forward is deprecated, use simulate instead"
     z = copy(z₀)
     fp = 1e6
     signal = ""
     bool_opt = false
     for k in 1:K
         # move to next iterate
-        _z, _τ = F(z)
-        z₁ = MarkovState(k, _z, _τ)
+        _z = F[1](z)
+        z₁ = MarkovState(k, _z, z.τ)
         # assign mixed-in function value
         z₁.f = z.f
         # copy previous recidivists

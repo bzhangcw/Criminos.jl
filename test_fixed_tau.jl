@@ -13,15 +13,20 @@ using ColorSchemes
 using CSV, Tables, DataFrames
 
 
-
+################################################################################
+# !!! set ℜ = 1 first
 ################################################################################
 include("./conf.jl")
-include("./tools.jl")
-
+# if ℜ > 1
+#     @warn "setting ℜ = 1, no policy for decision"
+#     exit(0)
+# end
+include("./init.jl")
+include("tools_traj.jl")
 
 series_color = palette(:default)
 series_size = length(series_color)
-
+################################################################################
 
 if bool_compute
     # store the runs by equilibrium
@@ -29,7 +34,7 @@ if bool_compute
     pops = Dict()
     runs_same_α = Dict()
     sum_population(z) = [z.x'z.ρ; z.x' * (-z.ρ .+ 1)]
-    ℓ = [0.05:0.05:0.95...]
+    ℓ = [0.05:0.05:0.4...]
     h = [0.05:0.05:0.95...]
     totalsize = length(ℓ) * length(h)
     model = Criminos.default_xinit_option.model
@@ -40,8 +45,10 @@ if bool_compute
             xₙ = Int(n // 2)
             τ[1:xₙ] .= α₁
             τ[xₙ:end] .= α₂
-            _z = MarkovState(0, [rand(n) .* rand(Float64) * 2; rand(n)], τ)
-            kₑ, z₊, ε, traj, bool_opt = Criminos.simulate(_z, Ψ, Fp; K=K, metrics=metrics)
+            _z = MarkovState(0, zᵦ.z, τ)
+            # _z = MarkovState(0, n, τ)
+            kₑ, ε, traj, bool_opt = Criminos.simulate(_z, Ψ, Fp; K=K, metrics=metrics)
+            traj = traj[1]
             if !bool_opt
                 @warn "not converged" α₁ α₂
                 # continue
@@ -67,12 +74,18 @@ if bool_compute
             end
 
             ProgressMeter.next!(p)
+            # break
         end
+        # break
     end
 end
 
 if bool_plot_trajectory && bool_use_html
-    include("tools_traj.jl")
+    fig3 = plot_trajectory(
+        runs, pops, style_name=style_name, format=format,
+        bool_show_equilibrium=false,
+        bool_label=false
+    )
     for (neidx, (key, trajs)) in enumerate(runs_same_α)
         data = hcat(trajs...)
         x, y, α₂ = data[1, :], data[2, :], data[3, :]
@@ -95,7 +108,7 @@ if bool_plot_trajectory && bool_use_html
         )
     end
 
-    savefig(fig3, "result/$style_correlation-$(nameof(style_correlation_seed))-quiver.$format")
+    savefig(fig3, "result/$style_name-quiver.$format")
 
 end
 
@@ -147,7 +160,7 @@ if bool_plot_surface
             )
         end
         df = DataFrame(hcat(contourfz...)', :auto)
-        CSV.write("$(style)-$(style_mixin_name)-contour-$(k).csv", df)
+        CSV.write("result/$style_name-contour-$(k).csv", df)
     end
-    savefig(fig4, "result/$style_correlation-$(nameof(style_correlation_seed))-contour.$format")
+    savefig(fig4, "result/$style_name-contour.$format")
 end

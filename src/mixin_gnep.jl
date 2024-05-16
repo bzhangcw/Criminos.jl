@@ -109,35 +109,34 @@ function mixed_in_gnep_grad(
     kwargs...
 )
     throw(ErrorException("not implemented correctly"))
-    _x = z.z[1:z.n]
-    _r = z.z[z.n+1:2z.n]
-    _τ = z.τ
-    _y = _x .* _r
-    d = _x |> length
-    _x₊ = _Φ * _x + Ψ.λ
-
-    z.f = 0.0 # unused
-    # we let y proceed a gradient step
-    _ψ, _ = ψ(_x₊, _r, _Φ, _τ, args; Ψ=Ψ, baropt=baropt)
-    # add cross term
-    _φ = _ψ + Ψ.Γ' * Ψ.M' * _x₊
-    u(y) = _φ' * y + dist(y, _y) / baropt.μ + y' * diagm(_τ) * C * diagm(_τ) * y / 2
-    # do a line search
-    α = 1 / baropt.μ
-    _y₊ = similar(_y)
-    _u = u(_y)
-    while true
-        _y₊ = _y - α * (_φ + diagm(_τ) * C * diagm(_τ) * _y)
-        _y₊ = min.(max.(_y₊, 1e-3), _x₊ .- 1e-3)
-        _u₊ = u(_y₊)
-        # @info "line search" α _u _u₊
-        if (_u₊ < _u) || (α < 1e-8)
-            break
-        end
-        α /= 1.2
-    end
-    _p = _y₊ ./ _x₊
-    return _p
+    # _x = z.z[1:z.n]
+    # _r = z.z[z.n+1:2z.n]
+    # _τ = z.τ
+    # _y = _x .* _r
+    # d = _x |> length
+    # _x₊ = _Φ * _x + Ψ.λ
+    # z.f = 0.0 # unused
+    # # we let y proceed a gradient step
+    # _ψ, _ = ψ(_x₊, _r, _Φ, _τ, args; Ψ=Ψ, baropt=baropt)
+    # # add cross term
+    # _φ = _ψ + Ψ.Γ' * Ψ.M' * _x₊
+    # u(y) = _φ' * y + dist(y, _y) / baropt.μ + y' * diagm(_τ) * C * diagm(_τ) * y / 2
+    # # do a line search
+    # α = 1 / baropt.μ
+    # _y₊ = similar(_y)
+    # _u = u(_y)
+    # while true
+    #     _y₊ = _y - α * (_φ + diagm(_τ) * C * diagm(_τ) * _y)
+    #     _y₊ = min.(max.(_y₊, 1e-3), _x₊ .- 1e-3)
+    #     _u₊ = u(_y₊)
+    #     # @info "line search" α _u _u₊
+    #     if (_u₊ < _u) || (α < 1e-8)
+    #         break
+    #     end
+    #     α /= 1.2
+    # end
+    # _p = _y₊ ./ _x₊
+    # return _p
 end
 
 function pot_gnep(z, z₊;

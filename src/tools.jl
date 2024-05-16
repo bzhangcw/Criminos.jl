@@ -1,6 +1,6 @@
 using LinearAlgebra
 using JuMP, Gurobi
-# import MathOptInterface as MOI
+import MathOptInterface as MOI
 
 
 function find_x(size, _x, _y; x0=nothing)
@@ -13,7 +13,6 @@ function find_x(size, _x, _y; x0=nothing)
         unregister(model, :ρ)
     end
     _c = -rand(Float64, size)
-    # if !default_xinit_option.is_setup
     if x0 |> isnothing
         @variable(model, x[1:size] .>= 0)
     else

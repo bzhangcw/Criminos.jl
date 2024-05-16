@@ -62,6 +62,7 @@ Base.show(io::IO, ::MIME"text/plain", z::MarkovState{R,Tx}) where {R,Tx} =
         """@current iterate $(z.n) states:
            x: $(round.(z.x;digits=2))
            ρ: $(round.(z.ρ;digits=2))
+           y: $(round.(z.y;digits=2))
         """
     )
 

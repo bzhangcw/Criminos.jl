@@ -74,11 +74,10 @@ export find_x
 
 
 
-function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true)
-
+function simulate(z₀::MarkovState, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true)
     z₊, bool_opt = Criminos.forward(z₀, Fp; K=K)
     ε = Dict()
-    for (idx, (func, fname)) in enumerate(metrics)
+    for (idx, (func, fname)) in enumerate(metrics[1])
         ε[fname] = zeros(z₊.k + 1)
     end
 
@@ -86,12 +85,12 @@ function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=tr
     traj = [z]
     kₑ = 0
     for k in 1:z₊.k+1
-        for (idx, (func, fname)) in enumerate(metrics)
+        for (idx, (func, fname)) in enumerate(metrics[1])
             ε[fname][k] = func(z, z₊)
         end
         # move to next iterate
-        _z, _τ = Fp(z)
-        z₁ = MarkovState(k, _z, _τ)
+        _z = Fp[1](z)
+        z₁ = MarkovState(k, _z, z.τ)
         # assign mixed-in function value
         z₁.f = z.f
         # copy previous recidivists
@@ -99,14 +98,56 @@ function simulate(z₀, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=tr
 
         kₑ = k
         push!(traj, z)
-        if (z₁.z - z.z) |> norm < 1e-7
+        if (z₁.z - z.z) |> norm < EPS_FP
             break
         end
         k += 1
 
         z = z₁
     end
-    return kₑ, z₊, ε, traj, bool_opt
+    return kₑ, [ε], [traj], bool_opt
+end
+
+function simulate(
+    zs::Vector{MarkovState{R,TR}}, Ψ, Fp;
+    K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true
+) where {R,TR}
+    ε = Dict()
+    Vz = copy.(zs)
+    traj = []
+    r = length(Vz)
+    kₑ = 0
+    for k::Int in 1:K
+        push!(traj, Vz)
+        eps = zeros(r)
+        _Vz = []
+        for (id, z) in enumerate(Vz)
+            # move to next iterate
+            _z = Fp[id](z)
+            z₁ = MarkovState(k, _z, z.τ)
+            # assign mixed-in function value
+            z₁.f = z.f
+            # copy previous recidivists
+            z₁.y₋ = copy(z.y)
+            eps[id] = norm(z₁.z - z.z)
+            z = z₁
+            push!(_Vz, z)
+        end
+        kₑ = k
+        if maximum(eps) < 1e-7
+            @info "converged in $kₑ steps"
+            break
+        end
+        k += 1
+        Vz = _Vz
+    end
+    for (id, z) in enumerate(Vz)
+        for (idx, (func, fname)) in enumerate(metrics[id])
+            z₊ = traj[end][id]
+            ε[id, fname] = [func(traj[j][id], z₊) for j in 1:kₑ]
+        end
+    end
+    return kₑ, ε, traj, bool_opt
 end
 
 
