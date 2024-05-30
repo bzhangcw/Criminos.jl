@@ -86,47 +86,45 @@ include("bidiag.jl")
 include("fixpoint.jl")
 include("mixin.jl")
 include("potfunc.jl")
-include("tools.jl")
+include("utils.jl")
 include("decision.jl")
 
 export find_x
 
 function simulate(
-    vector_ms::Vector{MarkovState{R,TR}}, Ψ, Fp;
+    vector_ms::Vector{MarkovState{R,TR}},
+    vec_Ψ,
+    Fp;
     K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true
 ) where {R,TR}
     ε = Dict()
+    # --------------------------------------------------
     # !!! do not change the original
+    # --------------------------------------------------
     Vz = copy.(vector_ms)
     traj = []
     r = length(Vz)
     kₑ = 0
+    eps = zeros(r)
     for k::Int in 1:K
         push!(traj, Vz)
-        eps = zeros(r)
-        _Vz = []
-        for (id, z) in enumerate(Vz)
-            # move to next iterate
-            z₁ = copy(z)
-            # keep previous offenders
-            z₁.y₋ = copy(z.y)
-            # FP iteration
-            Fp[id](z₁)
+        _Vz = copy.(Vz)
+        # FP iteration;
+        Fp(_Vz)
+        for (id, z) in enumerate(_Vz)
             # cal FP residual
-            eps[id] = norm(z₁.z - z.z)
-
-            push!(_Vz, z₁)
+            eps[id] = norm(Vz[id].z - z.z)
         end
         kₑ = k
         if maximum(eps) < 1e-7
             @info "converged in $kₑ steps"
             break
         end
-        k += 1
         Vz = _Vz
+        k += 1
     end
     for (id, z) in enumerate(Vz)
-        for (idx, (func, fname)) in enumerate(metrics[id])
+        for (func, fname) in metrics
             z₊ = traj[end][id]
             ε[id, fname] = [func(traj[j][id], z₊) for j in 1:kₑ]
         end

@@ -2,6 +2,26 @@ using Random
 using LinearAlgebra
 using Printf
 
+"""
+mutable struct BidiagSys{Tx,Tm}
+
+Bidiagonal system in the paper.
+
+## Fields
+- `n::Int`: Number of states.
+- `γ::Tx`: Rate retention.
+- `λ::Tx`: Rate arrival.
+- `q::Tx`: Probability.
+- `M::Tm`: Helper matrix.
+- `Q::Tm`: Helper matrix.
+- `Γ::Tm`: Helper matrix.
+- `Γₕ::Tm`: Helper matrix.
+- `style::Symbol`: Random or known.
+
+## Constructors
+- `BidiagSys(n::Int; style=:rand)`: Constructs a `BidiagSys` object with the specified number of states `n` and style `style`.
+
+"""
 Base.@kwdef mutable struct BidiagSys{Tx,Tm}
     n::Int = 0        # n states
     γ::Tx             # rate retention 
@@ -10,7 +30,7 @@ Base.@kwdef mutable struct BidiagSys{Tx,Tm}
     M::Tm             # helper matrix
     Q::Tm             # helper matrix
     Γ::Tm             # helper matrix
-    Λ::Tm             # helper matrix
+    Γₕ::Tm             # helper matrix
     style::Symbol     # random or known
 
     BidiagSys(n::Int; style=:rand) = (
@@ -53,8 +73,8 @@ function _construct_callback(n, this::BidiagSys; style=:rand)
         ErrorException("Unknown style: $style") |> throw
     end
     this.Γ = Diagonal(this.γ)
-    this.Λ = Diagonal(this.λ)
     this.Q = Diagonal(this.q)
+    this.Γₕ = this.M * this.Γ
     return this
 end
 

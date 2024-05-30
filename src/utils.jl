@@ -2,8 +2,11 @@ using LinearAlgebra
 using JuMP, Gurobi
 import MathOptInterface as MOI
 
-
-function find_x(size, _y, x_y; x0=nothing)
+"""
+locate y and x-y 
+based on sum(y) and sum(x-y)
+"""
+function locate_y(size, _y, x_y; x0=nothing)
 
     model = default_xinit_option.model
     empty!(model)
@@ -30,3 +33,4 @@ function find_x(size, _y, x_y; x0=nothing)
     delete(model, c2)
     return xx, yy
 end
+

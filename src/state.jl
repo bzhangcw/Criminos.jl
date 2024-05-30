@@ -6,6 +6,27 @@ function copy_fields(this, z0)
         setfield!(this, field, copy(getfield(z0, field)))
     end
 end
+
+"""
+struct MarkovState{R,Tx}
+
+A mutable struct representing the state of a Markov-type Dynamical system
+
+# Fields
+- `k::Int`: The iteration number.
+- `n::Int`: The number of states.
+- `z::Tx`: The fix-point iterate.
+- `x::Tx`: The iterate.
+- `ρ::Tx`: The probability.
+- `y::Tx`: The recidivists.
+- `y₋::Tx`: The previous recidivists.
+- `τ::Tx`: The treatment probability.
+- `f::Real`: The objective value of the mixed-in function.
+
+# Constructors
+- `MarkovState(k, n::Int; z=[Random.rand(Float64, n); Random.rand(Float64, n)], τ=Random.rand(Float64, n), β::Real=1.0)`: Constructs a `MarkovState` object with the given parameters.
+
+"""
 Base.@kwdef mutable struct MarkovState{R,Tx}
     k::Int = 0          # iteration
     n::Int = 0          # n states
@@ -16,46 +37,22 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
     y₋::Tx              # previous recivists
     τ::Tx               # treatment probability
     f::Real             # objective value of the mixed-in function
-    # use known initial condition
-    MarkovState(k, z0::Vector{Float64}, τ::Vector{Float64}) = (
-        this = new{Float64,Vector{Float64}}();
-        this.k = k;
-        this.z = copy(z0);
-        this.n = n = length(this.z) ÷ 2;
-        this.x = this.z[1:n];
-        this.ρ = this.z[n+1:2n];
-        this.y = this.x .* this.ρ;
-        this.y₋ = this.x .* this.ρ;
-        this.τ = τ;
-        this.f = 1e4;
-        return this
-    )
-
     # use random initial condition
-    MarkovState(k, n::Int, τ::Vector{Float64}) = (
+    MarkovState(
+        k, n::Int;
+        z=[Random.rand(Float64, n); Random.rand(Float64, n)],
+        τ=Random.rand(Float64, n),
+        β::Real=1.0
+    ) = (
         this = new{Float64,Vector{Float64}}();
         this.k = k;
         this.n = n;
-        this.x = Random.rand(Float64, n);
-        this.ρ = Random.rand(Float64, n);
+        this.x = z[1:n] * β;
+        this.ρ = z[n+1:2n];
         this.y = this.x .* this.ρ;
         this.y₋ = this.x .* this.ρ;
         this.z = [this.x; this.ρ];
-        this.τ = τ;
-        this.f = 1e4;
-        return this
-    )
-    # use random initial condition
-    MarkovState(k, n::Int) = (
-        this = new{Float64,Vector{Float64}}();
-        this.k = k;
-        this.n = n;
-        this.x = Random.rand(Float64, n);
-        this.ρ = Random.rand(Float64, n);
-        this.y = this.x .* this.ρ;
-        this.y₋ = this.x .* this.ρ;
-        this.z = [this.x; this.ρ];
-        this.τ = Random.rand(Float64, n);
+        this.τ = copy(τ);
         this.f = 1e4;
         return this
     )
@@ -68,6 +65,8 @@ Base.show(io::IO, ::MIME"text/plain", z::MarkovState{R,Tx}) where {R,Tx} =
            x: $(round.(z.x;digits=4))
            ρ: $(round.(z.ρ;digits=4))
            y: $(round.(z.y;digits=4))
+          ys: $(round.(z.y|>sum;digits=4))
+          xs: $(round.(z.x|>sum;digits=4))
         """
     )
 

@@ -18,17 +18,20 @@ dist = _dist_quad
 ################################################################################
 # UTILITY FUNCTIONS
 ################################################################################
-# u₁(x) without externality
+# u(x) without externality
 L(x, Ψ) = 1 / 2 * x' * (I - Ψ.Γ) * x - x' * Ψ.λ
-# u₂(x) without externality
+
+# w(x) without externality
 # linear quadratic function
+"""
+    linear quadratic function
+"""
 function w_linearquad(
-    y, _τ, args;
-    Ψ=nothing, baropt=default_barrier_option,
+    y, _τ, _c, args;
+    baropt=default_barrier_option,
     kwargs...
 )
     ∇₀, H₀, ∇ₜ, Hₜ, _... = args
-    _c = Ψ.Q * Ψ.λ
 
     Cₜ = diagm(_τ) * Hₜ * diagm(_τ) + H₀
     _w = (
@@ -48,52 +51,60 @@ w = w_linearquad
     ```
 """
 function mixed_in_gnep_best!(
-    z::MarkovState{R,Tx}, Ψ;
-    α=0.1,
+    vector_ms::Vector{MarkovState{R,Tx}},
+    vector_Ψ::Vector{BidiagSys{Tx,Tm}};
     args=nothing,
     baropt=default_barrier_option,
     kwargs...
-) where {R,Tx}
-    _x = z.z[1:z.n]
-    _τ = z.τ
-    _y = z.y
-    d = _x |> length # problem dimension
+) where {R,Tx,Tm}
+
+    _n = vector_ms[1].n
+    _N = _n * length(vector_ms)
     model = default_gnep_mixin_option.model
     if default_gnep_mixin_option.is_setup == false
-        @variable(model, y[1:d] .>= 0)
+        @variable(model, y[1:_N] .>= 0)
         default_gnep_mixin_option.y = y
         default_gnep_mixin_option.is_setup = true
     end
     y = default_gnep_mixin_option.y
     ##################################################
-    # constraints for y
-    set_upper_bound.(y, _x)
-
-    if !isnothing(default_gnep_mixin_option.ycon)
-        delete(model, default_gnep_mixin_option.ycon)
-        unregister(model, :ycon)
+    # constraints for each y
+    # sum of individual externality and proximity
+    _φ = 0.0
+    for (id, z) in enumerate(vector_ms)
+        _x = z.x
+        _y = y[(id-1)*_n+1:id*_n]
+        set_upper_bound.(_y, _x)
+        if !isnothing(default_gnep_mixin_option.ycon)
+            delete(model, default_gnep_mixin_option.ycon)
+            unregister(model, :ycon)
+        end
+        if default_gnep_mixin_option.is_kl
+            # if use smooth box constraint
+            default_gnep_mixin_option.ycon = @constraint(
+                model, ycon, _y' * log.(_y .+ 1e-3) + (_x - _y)' * log.(_x - _y) <= 1.1 + _x' * log.(_x / 2)
+            )
+        end
+        _φ += _y' * vector_Ψ[id].Γ' * vector_Ψ[id].M' * _x + dist(_y, z.y) / baropt.μ
     end
-    if default_gnep_mixin_option.is_kl
-        default_gnep_mixin_option.ycon = @constraint(
-            model, ycon, y' * log.(y .+ 1e-3) + (_x - y)' * log.(_x - y) <= 1.1 + _x' * log.(_x / 2)
-        )
-    end
+    # repeat the blocks
+    _c = vcat([Ψ.Q * Ψ.λ for Ψ in vector_Ψ]...)
+    _τ = vcat([z.τ for z in vector_ms]...)
     ##################################################
-    _w, ∇, ∇² = w(y, _τ, args; Ψ=Ψ, baropt=baropt)
-    # add cross term: the externality term
-    _φ = y' * Ψ.Γ' * Ψ.M' * _x
-    # add proximal term
-    _f_expr = _φ + dist(y, _y) / baropt.μ + _w
+    _w, ∇, ∇² = w(y, _τ, _c, args; baropt=baropt)
+    # add proximal term and the externality term
+    _f_expr = _φ + _w
     @objective(model, Min, _f_expr)
     ##################################################
     optimize!(model)
 
     if termination_status(model) != MOI.OPTIMAL
         @warn "Gurobi did not converge"
-        @warn "" _x _y
     end
-    z.f = objective_value(model)
-    z.y = value.(y)
+    yv = value.(y)
+    for (id, z) in enumerate(vector_ms)
+        z.y = yv[(id-1)*_n+1:id*_n]
+    end
 end
 
 @doc raw"""
@@ -102,7 +113,7 @@ end
     y \in [0, x_{k+1}]
     ```
 """
-function mixed_in_gnep_grad(
+function mixed_in_gnep_grad!(
     z, Ψ, ;
     α=0.1,
     args=nothing,
@@ -140,7 +151,8 @@ function mixed_in_gnep_grad(
     # return _p
 end
 
-function pot_gnep(z::MarkovState{R,Tx}, z₊::MarkovState{R,Tx};
+function pot_gnep(
+    z::MarkovState{R,Tx}, z₊::MarkovState{R,Tx};
     baropt=default_barrier_option,
     args=nothing,
     Ψ=nothing
@@ -148,16 +160,17 @@ function pot_gnep(z::MarkovState{R,Tx}, z₊::MarkovState{R,Tx};
     _τ = z.τ
     _x = z.x
     _y = z.y
-
+    _c = Ψ.Q * Ψ.λ
     _L = L(_x, Ψ)
-    _w, ∇, ∇² = w(_y, _τ, args; Ψ=Ψ, baropt=baropt)
+    _w, ∇, ∇² = w(_y, _τ, _c, args; Ψ=Ψ, baropt=baropt)
     _φ = _y' * Ψ.Γ' * Ψ.M' * _x
     return _L + _φ + dist(_y, z.y₋) / baropt.μ + _w
 end
 
 
 # verify KKT
-function kkt_box_opt(z::MarkovState{R,Tx};
+function kkt_box_opt(
+    z::MarkovState{R,Tx};
     baropt=default_barrier_option,
     args=nothing,
     Ψ=nothing
@@ -167,8 +180,8 @@ function kkt_box_opt(z::MarkovState{R,Tx};
     _x = z.x
     _r = z.ρ
     _y = z.y
-
-    _w, ∇, ∇² = w(_y, _τ, args; Ψ=Ψ, baropt=baropt)
+    _c = Ψ.Q * Ψ.λ
+    _w, ∇, ∇² = w(_y, _τ, _c, args; Ψ=Ψ, baropt=baropt)
     dx = (I - Ψ.Γ) * _x + Ψ.M * Ψ.Γ * _y - Ψ.λ
     dy = ∇ + Ψ.Γ' * Ψ.M' * _x
     v₊ = max.(0, -dy)

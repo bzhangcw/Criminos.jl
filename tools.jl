@@ -1,3 +1,66 @@
+using LinearAlgebra, SparseArrays
+
+function plot_convergence(ε, s)
+    pls = []
+    for id in 1:s
+        pl = plot(
+            size=(700 * s, 500),
+            labelfontsize=20,
+            xtickfont=font(25),
+            ytickfont=font(25),
+            legendfontsize=25,
+            titlefontsize=25,
+            extra_plot_kwargs=KW(
+                :include_mathjax => "cdn",
+            ),
+        )
+        for (func, fname) in metrics
+            vv = ε[id, fname]
+            kₑ = vv |> length
+            plot!(
+                pl, 1:kₑ,
+                vv[1:kₑ],
+                label=fname
+            )
+        end
+        push!(pls, pl)
+    end
+    fig = plot(pls...)
+    title!(fig, "Convergence of the metrics")
+    savefig(fig, "result/$style_name-convergence.$format")
+
+    @info "write to" "result/$style_name-convergence.$format"
+end
+
+function generate_Ω(N, n, ℜ)
+    G = blockdiag([sparse(Ψ.Γₕ' * inv(I - Ψ.Γ) * Ψ.Γₕ) for Ψ in vec_Ψ]...)
+    if style_correlation == :uppertriangular
+        ∇₀ = style_correlation_seed(N, N)
+        ∇ₜ = UpperTriangular(style_correlation_seed(N, N))
+        Hₜ = Symmetric(style_correlation_seed(N, N))
+        Hₜ = Hₜ' * Hₜ
+        # this is the lower bound to
+        #   guarantee the uniqueness of NE
+        H₀ = (
+            style_correlation_psd ? G + 1e-3 * I(N) : zeros(N, N)
+        )
+        Ω = (∇₀, H₀, ∇ₜ, Hₜ)
+    elseif style_correlation == :diagonal
+        # uncorrelated case
+        ∇₀ = Diagonal(style_correlation_seed(N, N))
+        ∇ₜ = Diagonal(style_correlation_seed(N, N))
+        Hₜ = Diagonal(style_correlation_seed(N, N))
+        Hₜ = Hₜ' * Hₜ
+        H₀ = style_correlation_psd ? (opnorm(G) + 1e-3) * I(N) : zeros(N, N)
+        Ω = (∇₀, H₀, ∇ₜ, Hₜ)
+    else
+        throw(ErrorException("not implemented"))
+    end
+    if style_correlation_subp
+        
+    end
+    return Ω, G
+end
 
 
 ################################################################################

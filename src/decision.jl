@@ -1,23 +1,24 @@
 ################################################################################
 # Decision rules and wrappers
 ################################################################################
+# the decision is made as a centralized party
 
-
-
-function c_linearquad(
-    _τ, args;
+function decision_identity(
+    vector_ms::Vector{MarkovState{R,Tx}},
+    vec_Ψ::Vector{BidiagSys{Tx,Tm}};
+    args=nothing,
     kwargs...
-)
-
-end
-
-function decision_identity(z; args=nothing, kwargs...)
+) where {R,Tx,Tm}
     # do nothing
-    return z.τ
 end
 
 # matching rule
-function decision_matching(z; args=nothing, kwargs...)
+function decision_matching(
+    vector_ms::Vector{MarkovState{R,Tx}},
+    vec_Ψ::Vector{BidiagSys{Tx,Tm}};
+    args=nothing,
+    kwargs...
+) where {R,Tx,Tm}
     _x = z.z[1:z.n]
     _ρ = z.z[z.n+1:2z.n]
     c, _... = args
@@ -27,7 +28,12 @@ function decision_matching(z; args=nothing, kwargs...)
 end
 
 # matching rule
-function decision_matching_lh(z; args=nothing, kwargs...)
+function decision_matching_lh(
+    vector_ms::Vector{MarkovState{R,Tx}},
+    vec_Ψ::Vector{BidiagSys{Tx,Tm}};
+    args=nothing,
+    kwargs...
+) where {R,Tx,Tm}
     _x = z.z[1:z.n]
     _ρ = z.z[z.n+1:2z.n]
     c, _... = args

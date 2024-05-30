@@ -14,29 +14,20 @@ using CSV, Tables, DataFrames
 
 ################################################################################
 include("./conf.jl")
+include("./tools.jl")
 include("./init.jl")
-include("tools_traj.jl")
 
 series_color = palette(:default)
 series_size = length(series_color)
 
 ################################################################################
-τ = ones(n) / 2
-xₙ = Int(n // 2)
-α₁ = 0.05
-α₂ = 0.05
-τ[1:xₙ] .= α₁
-τ[xₙ:end] .= α₂
-zs = [
-    MarkovState(0, n, τ) for _ in 1:ℜ
-]
 
 kₑ, ε, traj, bool_opt = Criminos.simulate(
-    zs, Ψ, Fp; K=1,
+    vec_z, vec_Ψ, Fp; K=K,
     metrics=metrics
 )
 
-plot_convergence(ε, zs |> length)
+plot_convergence(ε, vec_z |> length)
 r = traj[end]
 
 
@@ -76,15 +67,15 @@ if bool_compute
         for j in 1:maxsize
             Vz = Vector{MarkovState{Float64,Vector{Float64}}}(undef, length(r))
             for id in 1:length(r)
-                xx, yy = Criminos.find_x(n, xbox[id][i], ybox[id][i]; x0=zs[id].z[1:n])
+                xx, yy = Criminos.locate_y(n, xbox[id][i], ybox[id][i]; x0=vec_z[id].z[1:n])
                 if ((yy ./ xx) .- 1 |> maximum) > 1e-4
                     @warn "skip invalid value"
                     continue
                 end
-                _z = MarkovState(0, [xx; yy ./ xx], zs[id].τ)
+                _z = MarkovState(0, vec_z[id].n; z=[xx; yy ./ xx], τ=vec_z[id].τ)
                 Vz[id] = _z
             end
-            kₑ, ε, traj, bool_opt = Criminos.simulate(Vz, Ψ, Fp; K=K, metrics=metrics)
+            kₑ, ε, traj, bool_opt = Criminos.simulate(Vz, vec_Ψ, Fp; K=K, metrics=metrics)
             traj = hcat(traj...)
             if bool_opt
                 # only save converged ones
@@ -93,7 +84,6 @@ if bool_compute
                     key = tuple(
                         id,
                         round.(pps[end]; digits=2)...,
-                        round(ε[id, L"H"][kₑ]; digits=2)
                     )
                     println(key, "\t", length(traj[id, :]))
                     if key in keys(runs)

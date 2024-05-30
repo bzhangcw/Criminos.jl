@@ -16,39 +16,6 @@ using CSV, Tables, DataFrames
 
 
 
-function plot_convergence(ε, s)
-    pls = []
-    for id in 1:s
-        pl = plot(
-            size=(700 * s, 500),
-            labelfontsize=20,
-            xtickfont=font(25),
-            ytickfont=font(25),
-            legendfontsize=25,
-            titlefontsize=25,
-            extra_plot_kwargs=KW(
-                :include_mathjax => "cdn",
-            ),
-        )
-        for (idx, (func, fname)) in enumerate(metrics[id])
-            vv = ε[id, fname]
-            kₑ = vv |> length
-            plot!(
-                pl, 1:kₑ,
-                vv[1:kₑ],
-                label=fname
-            )
-        end
-        push!(pls, pl)
-    end
-    fig = plot(pls...)
-    title!(fig, "Convergence of the metrics")
-    savefig(fig, "result/$style_name-convergence.$format")
-
-    @info "write to" "result/$style_name-convergence.$format"
-end
-
-
 if bool_init
     # ----------------------------------------------------------------------------
     # decision
@@ -56,57 +23,41 @@ if bool_init
     cₜ = rand(n) / 10
 
     # ----------------------------------------------------------------------------
-    # mixed-in
+    # initial state
     # ----------------------------------------------------------------------------
-    Ψ = BidiagSys(n; style=style_retention)
-    Ωp = []
-    Fp = []
-    metrics = []
-    for _ in 1:ℜ
-        Ω = nothing
-        if style_correlation == :uppertriangular
-            ∇₀ = style_correlation_seed(n, n)
-            ∇ₜ = UpperTriangular(style_correlation_seed(n, n))
-            Hₜ = Symmetric(style_correlation_seed(n, n))
-            Hₜ = Hₜ' * Hₜ
-            # this is the lower bound to
-            #   guarantee the uniqueness of NE
-            G = Ψ.M * Ψ.Γ
-            H₀ = style_correlation_psd ? (G' * inv(I - Ψ.Γ) * G + 1e-3 * I(n)) : zeros(n, n)
-            Ω = (∇₀, H₀, ∇ₜ, Hₜ)
-        elseif style_correlation == :diagonal
-            # uncorrelated case
-            ∇₀ = Diagonal(style_correlation_seed(n, n))
-            ∇ₜ = Diagonal(style_correlation_seed(n, n))
-            Hₜ = Diagonal(style_correlation_seed(n, n))
-            Hₜ = Hₜ' * Hₜ
-            G = Ψ.M * Ψ.Γ
-            H₀ = style_correlation_psd ? (opnorm(G' * inv(I - Ψ.Γ) * G) + 1e-3) * I(n) : zeros(n, n)
-            Ω = (∇₀, H₀, ∇ₜ, Hₜ)
-        else
-            throw(ErrorException("not implemented"))
-        end
-        push!(Ωp, Ω)
-        push!(Fp, z -> F(Ψ, z; fₘ=style_mixin, margs=Ω,))
-
-        ################################################################################
-        # get the fixed-point plots 
-        ################################################################################
-        N(z, z₊) = Criminos.no_mixed_in(z, z₊; args=Ω, Ψ=Ψ)
-        H(z, z₊) = Criminos.pot_gnep(z, z₊; args=Ω, Ψ=Ψ)
-        ∑y(z, z₊) = Criminos.∑y(z, z₊)
-
-        ################################################################################
-        # get the fixed-point plots 
-        ################################################################################
-        push!(metrics, Dict(
-            Criminos.Lₓ => L"\|x - x^*\|",
-            Criminos.Lᵨ => L"\|\rho - \rho^*\|",
-            # ΔH => L"H - H^*",
-            # N => L"\textrm{No-Mixed-In}",
-            H => L"H",
-            ∑y => L"$\sum y$"
-        ))
+    τ = ones(n)
+    xₙ = Int(n // 2)
+    α₁ = 0.05
+    α₂ = 0.05
+    τ[1:xₙ] .= α₁
+    τ[xₙ:end] .= α₂
+    vec_z = [
+        MarkovState(0, n; τ=τ, β=group_size[idx]) for idx in 1:ℜ
+    ]
+    # ----------------------------------------------------------------------------
+    # system and mixed-in
+    # ----------------------------------------------------------------------------
+    vec_Ψ = [BidiagSys(n; style=style_retention) for idx in 1:ℜ]
+    for idx in 1:ℜ
+        vec_Ψ[idx].λ *= group_size[idx]
     end
-    zᵦ = MarkovState(0, [rand(n); rand(n)], ones(n) / 2)
+
+    # generate data for ℜ population
+    N = n * ℜ
+    Ω, G = generate_Ω(N, n, ℜ)
+    Fp(vec_z) = F(
+        vec_z, vec_Ψ;
+        fₜ=style_decision, targs=nothing,
+        fₘ=style_mixin, margs=Ω,
+    )
+
+    ################################################################################
+    # get the fixed-point plots 
+    ################################################################################
+    metrics = Dict(
+        Criminos.Lₓ => L"\|x - x^*\|",
+        Criminos.Lᵨ => L"\|y - y^*\|",
+        Criminos.∑y => L"$\sum y$"
+    )
+
 end
