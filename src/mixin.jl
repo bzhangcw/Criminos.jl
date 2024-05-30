@@ -3,7 +3,7 @@
 ################################################################################
 
 function mixed_in_identity(
-    z, Ψ, _Φ;
+    z, Ψ;
     args=nothing,
     baropt=default_barrier_option,
     kwargs...
@@ -21,7 +21,7 @@ end
     this only works with $\gamma < 1$
 """
 function mixed_in_binary_zigzag(
-    z, Ψ, _Φ;
+    z, Ψ;
     α=0.1, args=nothing, kwargs...
 )
     _x = z.z[1:z.n]

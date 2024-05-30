@@ -28,58 +28,19 @@ function F(
     fₘ=Criminos.mixed_in_identity, margs=nothing, # function of mixed-in effect
     kwargs...
 )
-    _λ = Ψ.λ
-    _x = z.z[1:z.n]
-    # transition
-    _Φ = Φ(Ψ, z)
 
-    z₊ = [Fₓ(_x, _λ, _Φ); fₘ(z, Ψ, _Φ; args=margs, kwargs...)]
-    return z₊
-end
+    fₘ(z, Ψ; args=margs, kwargs...)
+    Fₓ(z, Ψ)
 
-function J(Ψ::BidiagSys, z::MarkovState; fₘ=Criminos.no_mixed_in, margs=nothing, kwargs...)
-    _λ = Ψ.λ
 
-    # transition
-    _Fp(_z) = (
-        _Φ = Φ(Ψ, z);
-        [Fₓ(_z[1:z.n], _λ, _Φ); fₘ(z, Ψ, _Φ; args=margs, kwargs...)]
-    )
-    return ForwardDiff.jacobian(_Fp, z.z)
+    z.z = [z.x; z.ρ]
 end
 
 # population
-function Fₓ(_x, _λ, _Φ)
-    return _Φ * _x + _λ
-end
-
-
-function forward(z₀, F; K=10000, ϵ=EPS_FP)
-    @warn "forward is deprecated, use simulate instead"
-    z = copy(z₀)
-    fp = 1e6
-    signal = ""
-    bool_opt = false
-    for k in 1:K
-        # move to next iterate
-        _z = F[1](z)
-        z₁ = MarkovState(k, _z, z.τ)
-        # assign mixed-in function value
-        z₁.f = z.f
-        # copy previous recidivists
-        z₁.y₋ = copy(z.y)
-
-        fp = (z₁.z - z.z) |> norm
-        if fp ≤ ϵ * (z.z |> norm)
-            @printf("converged in %d iterations\n", k)
-            signal = "⋆"
-            bool_opt = true
-            break
-        end
-        z = copy(z₁)
-    end
-    @printf("%s final residual %.1e\n", signal, fp)
-    return z, bool_opt
+function Fₓ(z, Ψ)
+    z.x .= Ψ.Γ * z.x + Ψ.λ - Ψ.M * Ψ.Γ * z.y
+    z.ρ .= z.y ./ z.x
+    z.ρ[z.ρ.==Inf] .= 0
 end
 
 

@@ -61,7 +61,6 @@ if bool_init
     Ψ = BidiagSys(n; style=style_retention)
     Ωp = []
     Fp = []
-    Jp = []
     metrics = []
     for _ in 1:ℜ
         Ω = nothing
@@ -89,7 +88,6 @@ if bool_init
         end
         push!(Ωp, Ω)
         push!(Fp, z -> F(Ψ, z; fₘ=style_mixin, margs=Ω,))
-        push!(Jp, z -> J(Ψ, z; fₘ=style_mixin, margs=Ω))
 
         ################################################################################
         # get the fixed-point plots 

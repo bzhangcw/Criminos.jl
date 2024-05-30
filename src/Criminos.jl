@@ -4,14 +4,16 @@ using JuMP, Gurobi
 greet() = print("Hello World!")
 
 EPS_FP = 1e-5
-
+USE_KL = false
 ℓ = 1
 struct BarrierOption
     μ::Float64
 end
 mutable struct GNEPMixinOption
     y::Union{Nothing,Any}
+    ycon::Union{Nothing,Any}
     is_setup::Bool
+    is_kl::Bool
     model::Union{Nothing,Model}
 end
 mutable struct XInitHelper
@@ -30,15 +32,32 @@ default_barrier_option = BarrierOption(0.01)
 function __init__()
     global default_gnep_mixin_option, default_xinit_option
     GRB_ENV[] = Gurobi.Env()
-    default_gnep_mixin_option = GNEPMixinOption(
-        nothing,
-        false,
-        Model(optimizer_with_attributes(
+    if !USE_KL
+        _md = Model(optimizer_with_attributes(
             () -> Gurobi.Optimizer(GRB_ENV[]),
             "NonConvex" => 2,
             "LogToConsole" => 0
         ))
-    )
+        default_gnep_mixin_option = GNEPMixinOption(
+            nothing,
+            nothing,
+            false,
+            USE_KL,
+            _md
+        )
+    else
+        _md = Model(Ipopt.Optimizer)
+        set_attribute(_md, "max_cpu_time", 60.0)
+        # set_attribute(_md, "print_level", 0)
+        default_gnep_mixin_option = GNEPMixinOption(
+            nothing,
+            nothing,
+            false,
+            USE_KL,
+            _md
+        )
+    end
+
     default_xinit_option = XInitHelper(
         nothing,
         nothing,
@@ -72,48 +91,13 @@ include("decision.jl")
 
 export find_x
 
-
-
-function simulate(z₀::MarkovState, Ψ, Fp; K=10, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true)
-    z₊, bool_opt = Criminos.forward(z₀, Fp; K=K)
-    ε = Dict()
-    for (idx, (func, fname)) in enumerate(metrics[1])
-        ε[fname] = zeros(z₊.k + 1)
-    end
-
-    z = copy(z₀)
-    traj = [z]
-    kₑ = 0
-    for k in 1:z₊.k+1
-        for (idx, (func, fname)) in enumerate(metrics[1])
-            ε[fname][k] = func(z, z₊)
-        end
-        # move to next iterate
-        _z = Fp[1](z)
-        z₁ = MarkovState(k, _z, z.τ)
-        # assign mixed-in function value
-        z₁.f = z.f
-        # copy previous recidivists
-        z₁.y₋ = copy(z.y)
-
-        kₑ = k
-        push!(traj, z)
-        if (z₁.z - z.z) |> norm < EPS_FP
-            break
-        end
-        k += 1
-
-        z = z₁
-    end
-    return kₑ, [ε], [traj], bool_opt
-end
-
 function simulate(
-    zs::Vector{MarkovState{R,TR}}, Ψ, Fp;
+    vector_ms::Vector{MarkovState{R,TR}}, Ψ, Fp;
     K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true
 ) where {R,TR}
     ε = Dict()
-    Vz = copy.(zs)
+    # !!! do not change the original
+    Vz = copy.(vector_ms)
     traj = []
     r = length(Vz)
     kₑ = 0
@@ -123,15 +107,15 @@ function simulate(
         _Vz = []
         for (id, z) in enumerate(Vz)
             # move to next iterate
-            _z = Fp[id](z)
-            z₁ = MarkovState(k, _z, z.τ)
-            # assign mixed-in function value
-            z₁.f = z.f
-            # copy previous recidivists
+            z₁ = copy(z)
+            # keep previous offenders
             z₁.y₋ = copy(z.y)
+            # FP iteration
+            Fp[id](z₁)
+            # cal FP residual
             eps[id] = norm(z₁.z - z.z)
-            z = z₁
-            push!(_Vz, z)
+
+            push!(_Vz, z₁)
         end
         kₑ = k
         if maximum(eps) < 1e-7
@@ -153,5 +137,5 @@ end
 
 export MarkovState
 export BidiagSys
-export F, Φ, J
+export F
 end # module Criminos

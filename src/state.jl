@@ -1,6 +1,11 @@
 using Random
 using LinearAlgebra
 
+function copy_fields(this, z0)
+    for field in fieldnames(typeof(z0))
+        setfield!(this, field, copy(getfield(z0, field)))
+    end
+end
 Base.@kwdef mutable struct MarkovState{R,Tx}
     k::Int = 0          # iteration
     n::Int = 0          # n states
@@ -60,11 +65,14 @@ Base.show(io::IO, ::MIME"text/plain", z::MarkovState{R,Tx}) where {R,Tx} =
     print(
         io,
         """@current iterate $(z.n) states:
-           x: $(round.(z.x;digits=2))
-           ρ: $(round.(z.ρ;digits=2))
-           y: $(round.(z.y;digits=2))
+           x: $(round.(z.x;digits=4))
+           ρ: $(round.(z.ρ;digits=4))
+           y: $(round.(z.y;digits=4))
         """
     )
 
-Base.copy(z::MarkovState{R,Tx}) where {R,Tx} =
-    MarkovState(z.k, z.z, z.τ)
+Base.copy(z::MarkovState{R,Tx}) where {R,Tx} = begin
+    this = MarkovState(z.k, z.n)
+    copy_fields(this, z)
+    return this
+end

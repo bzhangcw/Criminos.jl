@@ -29,11 +29,10 @@ xₙ = Int(n // 2)
 τ[xₙ:end] .= α₂
 zs = [
     MarkovState(0, n, τ) for _ in 1:ℜ
-    # MarkovState(0, zᵦ.z, τ) for _ in 1:ℜ
 ]
 
 kₑ, ε, traj, bool_opt = Criminos.simulate(
-    zs, Ψ, Fp; K=K,
+    zs, Ψ, Fp; K=1,
     metrics=metrics
 )
 
@@ -48,7 +47,7 @@ if bool_compute
     ################################################################################
     # get the gradient plot searching over the neighborhood of z₊
     ################################################################################
-    sum_population(z) = [z.x'z.ρ; z.x' * (-z.ρ .+ 1)]
+    sum_population(z) = [z.y |> sum; (z.x - z.y) |> sum]
     xbox = Dict()
     ybox = Dict()
     radius = 2
@@ -56,9 +55,9 @@ if bool_compute
     for (id, z₊) in enumerate(r)
         global maxsize
         # create a box surrounding z₊  
-        x₊, y₊ = z₊.x'z₊.ρ, z₊.x' * (-z₊.ρ .+ 1)
-        _xbox = [-x₊:x₊/5:x₊*radius...] .+ x₊
-        _ybox = [-y₊:y₊/5:y₊*radius...] .+ y₊
+        y₊, x_y₊ = sum_population(z₊)
+        _xbox = [-y₊:y₊/5:y₊*radius...] .+ y₊
+        _ybox = [-x_y₊:x_y₊/5:x_y₊*radius...] .+ x_y₊
         _xbox = _xbox[_xbox.>0]
         _ybox = _ybox[_ybox.>0]
         xbox[id] = _xbox
@@ -77,12 +76,12 @@ if bool_compute
         for j in 1:maxsize
             Vz = Vector{MarkovState{Float64,Vector{Float64}}}(undef, length(r))
             for id in 1:length(r)
-                xx, pp = Criminos.find_x(n, xbox[id][i], ybox[id][i]; x0=zs[id].z[1:n])
-                if (pp .- 1 |> maximum) > 1e-4
+                xx, yy = Criminos.find_x(n, xbox[id][i], ybox[id][i]; x0=zs[id].z[1:n])
+                if ((yy ./ xx) .- 1 |> maximum) > 1e-4
                     @warn "skip invalid value"
                     continue
                 end
-                _z = MarkovState(0, [xx; pp], zs[id].τ)
+                _z = MarkovState(0, [xx; yy ./ xx], zs[id].τ)
                 Vz[id] = _z
             end
             kₑ, ε, traj, bool_opt = Criminos.simulate(Vz, Ψ, Fp; K=K, metrics=metrics)
@@ -123,6 +122,5 @@ if bool_plot_trajectory && bool_use_html
         runs, pops, style_name=style_name, format=format,
         bool_show_equilibrium=true,
     )
+    savefig(fig3, "result/$style_name-quiver.$format")
 end
-
-savefig(fig3, "result/$style_name-quiver.$format")
