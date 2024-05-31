@@ -1,5 +1,5 @@
 using Documenter
-
+using Criminos
 
 makedocs(
     sitename="Criminos.jl",
