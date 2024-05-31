@@ -5,7 +5,7 @@
 [docs-dev-img]: https://img.shields.io/badge/docs-dev-purple.svg
 <!-- [docs-stable-url]: https://JuliaSmoothOptimizers.github.io/LinearOperators.jl/stable -->
 <!-- [docs-dev-url]: https://JuliaSmoothOptimizers.github.io/LinearOperators.jl/dev -->
-[docs-stable-url]: https://github.com/bzhangcw/Criminos.jl/stable
-[docs-dev-url]: https://github.com/bzhangcw/Criminos.jl/dev
+[docs-stable-url]: https://bzhangcw.github.io/Criminos.jl/stable
+[docs-dev-url]: https://bzhangcw.github.io/Criminos.jl/dev
 
 
