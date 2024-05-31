@@ -1,7 +1,21 @@
+using Dates
+using Base.Filesystem
+
+# get the current date and format it as yyyymmdd
+current_date = Dates.format(now(), "yyyymmddHHMM")
+
+# Create the folder
+folder_name = current_date
 
 ################################################################################
 # !!!todo, change to argparse
 ################################################################################
+result_dir = "result-$folder_name"
+mkpath(result_dir)
+
+println(repeat("-", 80))
+println("result_dir: $result_dir")
+println(repeat("-", 80))
 correlation_styles = [
     :none,
     :diagonal,

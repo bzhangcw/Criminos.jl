@@ -27,9 +27,9 @@ function plot_convergence(ε, s)
     end
     fig = plot(pls...)
     title!(fig, "Convergence of the metrics")
-    savefig(fig, "result/$style_name-convergence.$format")
+    savefig(fig, "$result_dir/$style_name-convergence.$format")
 
-    @info "write to" "result/$style_name-convergence.$format"
+    @info "write to" "$result_dir/$style_name-convergence.$format"
 end
 
 function generate_Ω(N, n, ℜ)
@@ -56,8 +56,9 @@ function generate_Ω(N, n, ℜ)
     else
         throw(ErrorException("not implemented"))
     end
-    if style_correlation_subp
-        
+    if !style_correlation_subp
+        Hₜ = blockdiag([sparse(Hₜ[(id-1)*n+1:id*n, (id-1)*n+1:id*n]) for id in 1:ℜ]...)
+        Ω = (∇₀, H₀, ∇ₜ, Hₜ)
     end
     return Ω, G
 end
@@ -77,7 +78,7 @@ function plot_trajectory(
     fig3 = plot(
         legend=:outerright,
         legendfonthalign=:left,
-        xscale=:log2,
+        # xscale=:log2,
         yscale=:log2,
         size=(1800, 1200),
         title="Trajectory by $style_name[1:10]",

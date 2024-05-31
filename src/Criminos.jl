@@ -1,10 +1,11 @@
 module Criminos
 
-using JuMP, Gurobi
+using JuMP, Gurobi, Ipopt, HiGHS
 greet() = print("Hello World!")
 
 EPS_FP = 1e-5
 USE_KL = false
+USE_GUROBI = false
 ℓ = 1
 struct BarrierOption
     μ::Float64
@@ -31,8 +32,8 @@ default_xinit_option = Ref{XInitHelper}()
 default_barrier_option = BarrierOption(0.01)
 function __init__()
     global default_gnep_mixin_option, default_xinit_option
-    GRB_ENV[] = Gurobi.Env()
-    if !USE_KL
+    if USE_GUROBI
+        GRB_ENV[] = Gurobi.Env()
         _md = Model(optimizer_with_attributes(
             () -> Gurobi.Optimizer(GRB_ENV[]),
             "NonConvex" => 2,
@@ -46,9 +47,10 @@ function __init__()
             _md
         )
     else
-        _md = Model(Ipopt.Optimizer)
-        set_attribute(_md, "max_cpu_time", 60.0)
-        # set_attribute(_md, "print_level", 0)
+        _md = Model(optimizer_with_attributes(
+            () -> HiGHS.Optimizer(),
+            "log_to_console" => false
+        ))
         default_gnep_mixin_option = GNEPMixinOption(
             nothing,
             nothing,
@@ -62,11 +64,14 @@ function __init__()
         nothing,
         nothing,
         false,
-        Model(optimizer_with_attributes(
+        USE_GUROBI ? Model(optimizer_with_attributes(
             () -> Gurobi.Optimizer(GRB_ENV[]),
             "NonConvex" => 2,
             "LogToConsole" => 0,
             "LogFile" => "grb.criminos.findx.log"
+        )) : Model(optimizer_with_attributes(
+            () -> HiGHS.Optimizer(),
+            "log_to_console" => false,
         )),
         nothing,
         nothing

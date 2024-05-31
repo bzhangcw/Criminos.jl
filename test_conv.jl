@@ -21,7 +21,6 @@ series_color = palette(:default)
 series_size = length(series_color)
 
 ################################################################################
-
 kₑ, ε, traj, bool_opt = Criminos.simulate(
     vec_z, vec_Ψ, Fp; K=K,
     metrics=metrics
@@ -47,6 +46,8 @@ if bool_compute
         global maxsize
         # create a box surrounding z₊  
         y₊, x_y₊ = sum_population(z₊)
+        y₊ = max(y₊, 1e-1)
+        x_y₊ = max(x_y₊, 1e-1)
         _xbox = [-y₊:y₊/5:y₊*radius...] .+ y₊
         _ybox = [-x_y₊:x_y₊/5:x_y₊*radius...] .+ x_y₊
         _xbox = _xbox[_xbox.>0]
@@ -112,5 +113,5 @@ if bool_plot_trajectory && bool_use_html
         runs, pops, style_name=style_name, format=format,
         bool_show_equilibrium=true,
     )
-    savefig(fig3, "result/$style_name-quiver.$format")
+    savefig(fig3, "$result_dir/$style_name-quiver.$format")
 end

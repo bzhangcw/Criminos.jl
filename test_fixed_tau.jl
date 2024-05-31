@@ -108,7 +108,7 @@ if bool_plot_trajectory && bool_use_html
         )
     end
 
-    savefig(fig3, "result/$style_name-quiver.$format")
+    savefig(fig3, "$result_dir/$style_name-quiver.$format")
 
 end
 
@@ -160,7 +160,7 @@ if bool_plot_surface
             )
         end
         df = DataFrame(hcat(contourfz...)', :auto)
-        CSV.write("result/$style_name-contour-$(k).csv", df)
+        CSV.write("$result_dir/$style_name-contour-$(k).csv", df)
     end
-    savefig(fig4, "result/$style_name-contour.$format")
+    savefig(fig4, "$result_dir/$style_name-contour.$format")
 end

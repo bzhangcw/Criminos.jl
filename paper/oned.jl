@@ -40,4 +40,4 @@ end
 # Combine the plots into one
 
 # Show the final plot
-savefig(final_plot, "result/utility-1d.pdf")
+savefig(final_plot, "$result_dir/utility-1d.pdf")

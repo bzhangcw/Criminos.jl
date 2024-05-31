@@ -98,7 +98,7 @@ function mixed_in_gnep_best!(
     ##################################################
     optimize!(model)
 
-    if termination_status(model) != MOI.OPTIMAL
+    if termination_status(model) ∉ (MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.FEASIBLE_POINT)
         @warn "Gurobi did not converge"
     end
     yv = value.(y)
