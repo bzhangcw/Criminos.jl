@@ -14,3 +14,16 @@ end
 function ∑y(z, z₊; p=1)
     return sum(z.y)
 end
+
+function ∑τ(z, z₊; p=1)
+    return sum(z.τ)
+end
+
+function ∑x(z, z₊; p=1)
+    return sum(z.x)
+end
+
+function θ(z, z₊; p=1)
+    return z.θ
+end
+

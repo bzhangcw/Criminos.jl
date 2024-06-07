@@ -8,6 +8,7 @@ function plot_convergence(ε, s)
             labelfontsize=20,
             xtickfont=font(25),
             ytickfont=font(25),
+            # xscale=:log2,
             legendfontsize=25,
             titlefontsize=25,
             extra_plot_kwargs=KW(
@@ -34,29 +35,29 @@ end
 
 function generate_Ω(N, n, ℜ)
     G = blockdiag([sparse(Ψ.Γₕ' * inv(I - Ψ.Γ) * Ψ.Γₕ) for Ψ in vec_Ψ]...)
-    if style_correlation == :uppertriangular
-        ∇₀ = style_correlation_seed(N, N)
-        ∇ₜ = UpperTriangular(style_correlation_seed(N, N))
-        Hₜ = Symmetric(style_correlation_seed(N, N))
+    if cc.style_correlation == :uppertriangular
+        ∇₀ = cc.style_correlation_seed(N, N)
+        ∇ₜ = UpperTriangular(cc.style_correlation_seed(N, N))
+        Hₜ = Symmetric(cc.style_correlation_seed(N, N))
         Hₜ = Hₜ' * Hₜ
         # this is the lower bound to
         #   guarantee the uniqueness of NE
         H₀ = (
-            style_correlation_psd ? G + 1e-3 * I(N) : zeros(N, N)
+            cc.style_correlation_psd ? G + 1e-3 * I(N) : zeros(N, N)
         )
         Ω = (∇₀, H₀, ∇ₜ, Hₜ)
-    elseif style_correlation == :diagonal
+    elseif cc.style_correlation == :diagonal
         # uncorrelated case
         ∇₀ = Diagonal(style_correlation_seed(N, N))
         ∇ₜ = Diagonal(style_correlation_seed(N, N))
         Hₜ = Diagonal(style_correlation_seed(N, N))
         Hₜ = Hₜ' * Hₜ
-        H₀ = style_correlation_psd ? (opnorm(G) + 1e-3) * I(N) : zeros(N, N)
+        H₀ = cc.style_correlation_psd ? (opnorm(G) + 1e-3) * I(N) : zeros(N, N)
         Ω = (∇₀, H₀, ∇ₜ, Hₜ)
     else
         throw(ErrorException("not implemented"))
     end
-    if !style_correlation_subp
+    if !cc.style_correlation_subp
         Hₜ = blockdiag([sparse(Hₜ[(id-1)*n+1:id*n, (id-1)*n+1:id*n]) for id in 1:ℜ]...)
         Ω = (∇₀, H₀, ∇ₜ, Hₜ)
     end

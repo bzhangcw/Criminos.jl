@@ -71,25 +71,42 @@ function mixed_in_gnep_best!(
     # constraints for each y
     # sum of individual externality and proximity
     _φ = 0.0
+    ycons = []
     for (id, z) in enumerate(vector_ms)
+        z.y₋ = copy(z.y)
         _x = z.x
+        _x₋ = z.x₋
         _y = y[(id-1)*_n+1:id*_n]
+        _Ψ = vector_Ψ[id]
+
+        # set upper bound
         set_upper_bound.(_y, _x)
-        if !isnothing(default_gnep_mixin_option.ycon)
-            delete(model, default_gnep_mixin_option.ycon)
-            unregister(model, :ycon)
-        end
-        if default_gnep_mixin_option.is_kl
-            # if use smooth box constraint
-            default_gnep_mixin_option.ycon = @constraint(
-                model, ycon, _y' * log.(_y .+ 1e-3) + (_x - _y)' * log.(_x - _y) <= 1.1 + _x' * log.(_x / 2)
-            )
-        end
-        _φ += _y' * vector_Ψ[id].Γ' * vector_Ψ[id].M' * _x + dist(_y, z.y) / baropt.μ
+        # if default_gnep_mixin_option.is_kl
+        # if use smooth box constraint
+        # _ycon = @constraint(
+        #     model,
+        #     1e-1 * _y' * log.(_y .+ 1e-3) + (_x - _y)' * log.(_x - _y) <= _x' * log.(_x / 2) + 0.5 * sum(_x)
+        # )
+
+        _ycon = @constraint(
+            model,
+            # log.(_x - _y) .>= log.(_x / 10) * 0.5
+            _y .<= _x .* (1 - √exp(1) / 10)
+        )
+
+        # _tol = round.(0.1 .* (_x₋ .+ 1e-4) .* z.y; digits=2)
+        # _ycon = @constraint(
+        #     model,
+        #     (_x₋ .+ 1e-4) .* _y - round.((_x₋ .+ 1e-4) .* (2 * _Ψ.Γ - _Ψ.Γₕ) * z.y - _Ψ.Γ * (z.y .^ 2); digits=2) .<= _tol
+        # )
+        push!(ycons, _ycon)
+        # else
+        # end
+        _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y + _Ψ.Q * _Ψ.λ) / baropt.μ
     end
     # repeat the blocks
     _c = vcat([Ψ.Q * Ψ.λ for Ψ in vector_Ψ]...)
-    _τ = vcat([z.τ for z in vector_ms]...)
+    _τ = vcat([z.τ .* z.β for z in vector_ms]...)
     ##################################################
     _w, ∇, ∇² = w(y, _τ, _c, args; baropt=baropt)
     # add proximal term and the externality term
@@ -99,12 +116,21 @@ function mixed_in_gnep_best!(
     optimize!(model)
 
     if termination_status(model) ∉ (MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.FEASIBLE_POINT)
-        @warn "Gurobi did not converge"
+        @warn "Optimizer did not converge"
+        @info "" model
+        @info "" latex_formulation(model)
+        @info "" termination_status(model)
+        write_to_file(model, "model.lp")
+        for c in ycons
+            delete(model, c)
+        end
+        return 0
     end
     yv = value.(y)
     for (id, z) in enumerate(vector_ms)
         z.y = yv[(id-1)*_n+1:id*_n]
     end
+    return 1
 end
 
 @doc raw"""

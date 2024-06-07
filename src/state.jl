@@ -17,6 +17,7 @@ A mutable struct representing the state of a Markov-type Dynamical system
 - `n::Int`: The number of states.
 - `z::Tx`: The fix-point iterate.
 - `x::Tx`: The iterate.
+- `x₋::Tx`: The previous iterate.
 - `ρ::Tx`: The probability.
 - `y::Tx`: The recidivists.
 - `y₋::Tx`: The previous recidivists.
@@ -32,11 +33,14 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
     n::Int = 0          # n states
     z::Tx               # fix-point iterate
     x::Tx               # iterate
+    x₋::Tx              # previous iterate
     ρ::Tx               # probability
     y::Tx               # recivists
     y₋::Tx              # previous recivists
     τ::Tx               # treatment probability
     f::Real             # objective value of the mixed-in function
+    β::Real             # group size
+    θ::Real             # cutoff risk value
     # use random initial condition
     MarkovState(
         k, n::Int;
@@ -47,13 +51,16 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
         this = new{Float64,Vector{Float64}}();
         this.k = k;
         this.n = n;
-        this.x = z[1:n] * β;
         this.ρ = z[n+1:2n];
-        this.y = this.x .* this.ρ;
-        this.y₋ = this.x .* this.ρ;
+        this.x₋ = z[1:n] * β;
+        this.y₋ = this.x₋ .* this.ρ;
+        this.y = this.x₋ .* this.ρ;
+        this.x = z[1:n] * β;
+        this.β = β;
         this.z = [this.x; this.ρ];
         this.τ = copy(τ);
         this.f = 1e4;
+        this.θ = 0.0;
         return this
     )
 end
@@ -65,8 +72,8 @@ Base.show(io::IO, ::MIME"text/plain", z::MarkovState{R,Tx}) where {R,Tx} =
            x: $(round.(z.x;digits=4))
            ρ: $(round.(z.ρ;digits=4))
            y: $(round.(z.y;digits=4))
-          ys: $(round.(z.y|>sum;digits=4))
-          xs: $(round.(z.x|>sum;digits=4))
+           ∑: $(round.(z.y|>sum;digits=4))/$(round.(z.x|>sum;digits=4))
+           τ: $(round.(z.τ;digits=4))
         """
     )
 

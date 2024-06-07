@@ -20,17 +20,19 @@ include("./init.jl")
 series_color = palette(:default)
 series_size = length(series_color)
 
-################################################################################
-kₑ, ε, traj, bool_opt = Criminos.simulate(
-    vec_z, vec_Ψ, Fp; K=K,
-    metrics=metrics
-)
+if cc.bool_conv
+    ################################################################################
+    kₑ, ε, traj, bool_opt = Criminos.simulate(
+        vec_z, vec_Ψ, Fp; K=K,
+        metrics=metrics
+    )
+end
 
 plot_convergence(ε, vec_z |> length)
 r = traj[end]
 
 
-if bool_compute
+if cc.bool_compute
     # store the runs by equilibrium
     runs = Dict()
     pops = Dict()
@@ -108,7 +110,7 @@ if bool_compute
     @info "\n" "Equilibriums: $equilibriums" "size: $(length(equilibriums))"
 end
 
-if bool_plot_trajectory && bool_use_html
+if cc.bool_plot_trajectory && cc.bool_use_html
     fig3 = plot_trajectory(
         runs, pops, style_name=style_name, format=format,
         bool_show_equilibrium=true,
