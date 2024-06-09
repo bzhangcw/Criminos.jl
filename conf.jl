@@ -1,43 +1,28 @@
-using Base.Filesystem
-using Dates, YAML
+
+module CriminosConfigs
+using Base.Filesystem, Dates, YAML, Criminos
+f_config = nothing
+if length(ARGS) == 0
+    println("using configuration file: conf.yaml")
+    f_config = "conf.yaml"
+else
+    println("using configuration file: $(ARGS[1])")
+    f_config = ARGS[1]
+end
 
 # get the current date and format it as yyyymmdd
-current_date = Dates.format(now(), "yyyymmdd/HHMM")
+current_date = Dates.format(now(), "yyyymmdd/HHMMSS")
 
 # Create the folder
 folder_name = current_date
-
-################################################################################
-# !!!todo, change to argparse
-################################################################################
 result_dir = "result-$folder_name"
 mkpath(result_dir)
 
 println(repeat("-", 80))
 println("result_dir: $result_dir")
 println(repeat("-", 80))
-
-# style_retention = :rand
-# style_correlation = :uppertriangular
-# style_correlation_seed = rand
-# style_correlation_psd = true # whether to ensure psd
-# style_correlation_subp = false # whether to use subpopulation correlation
-# style_mixin = Criminos.mixed_in_gnep_best!
-# style_mixin_name = style_mixin |> nameof
-# style_decision = Criminos.decision_identity
-# # style_decision = Criminos.decision_matching
-# # style_decision = Criminos.decision_matching_lh
-# style_decision_name = style_decision |> nameof
-# bool_use_html = true
-# bool_init = true
-# bool_conv = true
-# bool_compute = false
-# bool_plot_trajectory = false
-# bool_plot_surface = false
-
-module CriminosConfigs
-using YAML, Criminos
-variables_from_yaml = YAML.load_file("conf.yaml")
+variables_from_yaml = YAML.load_file(f_config)
+variables_from_yaml["output_dir"] = result_dir
 style_retention = Symbol(variables_from_yaml["style_retention"])
 style_correlation = Symbol(variables_from_yaml["style_correlation"])
 style_correlation_seed = eval(variables_from_yaml["style_correlation_seed"] |> Symbol)
@@ -56,6 +41,9 @@ bool_plot_surface = variables_from_yaml["bool_plot_surface"]
 α₁ = variables_from_yaml["α₁"]
 α₂ = variables_from_yaml["α₂"]
 seed_number = variables_from_yaml["seed_number"]
+R = variables_from_yaml["R"]
+group_size = variables_from_yaml["group_size"]
+group_new_ratio = variables_from_yaml["group_new_ratio"]
 end
 
 cc = CriminosConfigs
@@ -74,8 +62,7 @@ style_arr = (
     cc.style_decision_name
 )
 
-style_name = Printf.format(join(["%s" for _ in style_arr], "-") |> Printf.Format, style_arr...)
-style_disp = Printf.format(join(["- %s" for _ in style_arr], "\n") |> Printf.Format, style_arr...)
+style_name = @sprintf "%s" cc.style_decision_name
 
 println(repeat("-", 80))
 println("Simulation Style Configs:\n")
@@ -98,7 +85,6 @@ Random.seed!(cc.seed_number)
 K = 2000           # number of maximum iterations
 n = 8               # state size: 0, 1, ..., n-1
 # number of subpopulations
-ℜ = 2
-group_size = [1:5:5*ℜ...]
-group_new_ratio = [1:3:3*ℜ...]
-# group_size = reverse!([1:5:5*ℜ...])
+ℜ = cc.R
+group_size = cc.group_size
+group_new_ratio = cc.group_new_ratio

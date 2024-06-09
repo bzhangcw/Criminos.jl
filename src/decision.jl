@@ -8,6 +8,17 @@ optalg = LBFGS(; m=10,
     linesearch=LineSearches.HagerZhang(),
 )
 
+function decision_null!(
+    vector_ms::Vector{MarkovState{R,Tx}},
+    vec_Ψ::Vector{BidiagSys{Tx,Tm}};
+    args=nothing,
+    kwargs...
+) where {R,Tx,Tm}
+    # do nothing
+    for (id, z) in enumerate(vector_ms)
+        z.τ .= 0.0
+    end
+end
 
 function decision_identity!(
     vector_ms::Vector{MarkovState{R,Tx}},
@@ -65,7 +76,7 @@ function decision_matching_lh!(
     vector_ms::Vector{MarkovState{R,Tx}},
     vec_Ψ::Vector{BidiagSys{Tx,Tm}};
     args=nothing,
-    ℓ=0.2,
+    ℓ=0.05,
     kwargs...
 ) where {R,Tx,Tm}
     cₜ, α₁, α₂, _... = args

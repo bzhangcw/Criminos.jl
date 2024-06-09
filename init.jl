@@ -63,10 +63,10 @@ if cc.bool_init
     # get the fixed-point plots 
     ################################################################################
     metrics = Dict(
-        # Criminos.Lₓ => L"\|x - x^*\|",
-        # Criminos.Lᵨ => L"\|y - y^*\|",
+        Criminos.Lₓ => L"\|x - x^*\|",
+        Criminos.Lᵨ => L"\|y - y^*\|",
         Criminos.∑y => L"$\sum y$",
-        Criminos.∑τ => L"$\sum \tau$",
+        # Criminos.∑τ => L"$\sum \tau$",
         Criminos.∑x => L"$\sum x$",
         Criminos.θ => L"$\theta$",
     )

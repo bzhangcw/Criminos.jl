@@ -28,12 +28,12 @@ style_mixin: "mixed_in_gnep_best!"
 # - decision_identity!   : do nothing, keep as initial (default)
 # - decision_matching_lh!: apply a 0-1 matching/classification law
 # style_decision: "decision_null!"
-# style_decision: "decision_identity!"
-style_decision: "decision_matching_lh!"
+style_decision: "decision_identity!"
+# style_decision: "decision_matching_lh!"
 # α₁, α₂ are the parameters for the decision function
 #   if using the low-high 2-group rule to set τ
-α₁: 0.2
-α₂: 0.8
+α₁: 0.1
+α₂: 0.5
 
 # ---------------------------------------
 # bool options, true or false

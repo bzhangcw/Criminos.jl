@@ -70,6 +70,7 @@ Base.show(io::IO, ::MIME"text/plain", z::MarkovState{R,Tx}) where {R,Tx} =
         io,
         """@current iterate $(z.n) states:
            x: $(round.(z.x;digits=4))
+           x₋: $(round.(z.x₋;digits=4))
            ρ: $(round.(z.ρ;digits=4))
            y: $(round.(z.y;digits=4))
            ∑: $(round.(z.y|>sum;digits=4))/$(round.(z.x|>sum;digits=4))

@@ -128,7 +128,9 @@ function simulate(
     vector_ms::Vector{MarkovState{R,TR}},
     vec_Ψ,
     Fp;
-    K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true
+    K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL],
+    bool_verbose=false,
+    bool_opt=true
 ) where {R,TR}
     ε = Dict()
     # --------------------------------------------------

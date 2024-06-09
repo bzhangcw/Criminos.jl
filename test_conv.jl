@@ -17,6 +17,7 @@ include("./conf.jl")
 include("./tools.jl")
 include("./init.jl")
 
+K = 10000
 series_color = palette(:default)
 series_size = length(series_color)
 
@@ -115,5 +116,5 @@ if cc.bool_plot_trajectory && cc.bool_use_html
         runs, pops, style_name=style_name, format=format,
         bool_show_equilibrium=true,
     )
-    savefig(fig3, "$result_dir/$style_name-quiver.$format")
+    savefig(fig3, "$(cc.result_dir)/$style_name-quiver.$format")
 end

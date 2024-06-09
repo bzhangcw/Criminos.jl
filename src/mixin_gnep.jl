@@ -32,13 +32,17 @@ function w_linearquad(
     kwargs...
 )
     ∇₀, H₀, ∇ₜ, Hₜ, _... = args
-
-    Cₜ = diagm(_τ) * Hₜ * diagm(_τ) + H₀
+    _t = _τ .+ 1
+    _T = diagm(_τ)
+    # Cₜ = diagm(_τ) * Hₜ * diagm(_τ) + H₀
+    # cₜ = (∇ₜ*_τ)[:] - (∇₀*_c)[:]
+    Cₜ = _T * (Hₜ) * _T + H₀
+    cₜ = -(∇ₜ*_t)[:] - (Cₜ*∇₀*_c)[:]
     _w = (
         y' * Cₜ * y / 2 +    # second-order
-        y' * ((∇ₜ*_τ)[:] - (∇₀*_c)[:])               # first-order
+        y' * cₜ             # first-order
     )
-    ∇ = Cₜ * y + ((∇ₜ*_τ)[:] - (∇₀*_c)[:])
+    ∇ = Cₜ * y + cₜ
     return _w, ∇, 0.0
 end
 w = w_linearquad
@@ -102,7 +106,8 @@ function mixed_in_gnep_best!(
         push!(ycons, _ycon)
         # else
         # end
-        _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y + _Ψ.Q * _Ψ.λ) / baropt.μ
+        # _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y + _Ψ.Q * _Ψ.λ) / baropt.μ
+        _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y) / baropt.μ
     end
     # repeat the blocks
     _c = vcat([Ψ.Q * Ψ.λ for Ψ in vector_Ψ]...)
@@ -126,9 +131,13 @@ function mixed_in_gnep_best!(
         end
         return 0
     end
+
     yv = value.(y)
     for (id, z) in enumerate(vector_ms)
         z.y = yv[(id-1)*_n+1:id*_n]
+    end
+    for c in ycons
+        delete(model, c)
     end
     return 1
 end

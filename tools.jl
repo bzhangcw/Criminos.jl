@@ -1,19 +1,10 @@
-using LinearAlgebra, SparseArrays
+using LinearAlgebra, SparseArrays, Arpack
 
 function plot_convergence(ε, s)
     pls = []
     for id in 1:s
         pl = plot(
-            size=(700 * s, 500),
-            labelfontsize=20,
-            xtickfont=font(25),
-            ytickfont=font(25),
-            # xscale=:log2,
-            legendfontsize=25,
-            titlefontsize=25,
-            extra_plot_kwargs=KW(
-                :include_mathjax => "cdn",
-            ),
+            size=(700 * (s), 900),
         )
         for (func, fname) in metrics
             vv = ε[id, fname]
@@ -21,22 +12,45 @@ function plot_convergence(ε, s)
             plot!(
                 pl, 1:kₑ,
                 vv[1:kₑ],
-                label=fname
+                label=fname,
+                title="group-$id",
+                legend_column=length(metrics)
             )
         end
         push!(pls, pl)
     end
-    fig = plot(pls...)
-    title!(fig, "Convergence of the metrics")
-    savefig(fig, "$result_dir/$style_name-convergence.$format")
+    pl = plot(
+        size=(700 * (s), 900),
+    )
+    # plot!(
+    #     pl, 1:2,
+    #     1:2,
+    #     label="",
+    #     alpha=0.0
+    # )
+    push!(pls, pl)
+    fig = plot(pls...,
+        legend=:bottom,
+        labelfontsize=20,
+        xtickfont=font(25),
+        ytickfont=font(25),
+        # xscale=:log2,
+        legendfontsize=25,
+        titlefontsize=25,
+        extra_plot_kwargs=KW(
+            :include_mathjax => "cdn",
+        ),)
+    savefig(fig, "$(cc.result_dir)/$style_name-convergence.$format")
 
-    @info "write to" "$result_dir/$style_name-convergence.$format"
+    @info "write to" "$(cc.result_dir)/$style_name-convergence.$format"
 end
 
 function generate_Ω(N, n, ℜ)
     G = blockdiag([sparse(Ψ.Γₕ' * inv(I - Ψ.Γ) * Ψ.Γₕ) for Ψ in vec_Ψ]...)
+    D, _ = eigs(G)
+    D = real(D)
     if cc.style_correlation == :uppertriangular
-        ∇₀ = cc.style_correlation_seed(N, N)
+        ∇₀ = Matrix(G)
         ∇ₜ = UpperTriangular(cc.style_correlation_seed(N, N))
         Hₜ = Symmetric(cc.style_correlation_seed(N, N))
         Hₜ = Hₜ' * Hₜ
