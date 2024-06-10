@@ -8,6 +8,10 @@ optalg = LBFGS(; m=10,
     linesearch=LineSearches.HagerZhang(),
 )
 
+# false positive rate, 
+#  I is the index of predicted positive samples
+fp(I, z) = I' * (z.x₋ - z.y) / sum(z.x₋ - z.y)
+
 function decision_null!(
     vector_ms::Vector{MarkovState{R,Tx}},
     vec_Ψ::Vector{BidiagSys{Tx,Tm}};
@@ -27,7 +31,60 @@ function decision_identity!(
     kwargs...
 ) where {R,Tx,Tm}
     # do nothing
+    for (id, z) in enumerate(vector_ms)
+        _I = (z.τ .== maximum(z.τ))
+        _fpr = fp(_I, z)
+        z.fpr = _fpr
+    end
 end
+
+
+
+function decision_matching_lh!(
+    vector_ms::Vector{MarkovState{R,Tx}},
+    vec_Ψ::Vector{BidiagSys{Tx,Tm}};
+    args=nothing,
+    ℓ=0.05,
+    kwargs...
+) where {R,Tx,Tm}
+    cₜ, α₁, α₂, _... = args
+    # at this model, we use logistic regression to 
+    # match X^{-1}y to N, the number of records
+    for (id, z) in enumerate(vector_ms)
+        _y = z.y
+        _N = [0:z.n-1...]
+        h(a) = 1 ./ (1 .+ exp.(-_N * a[1] .+ a[2]))
+        f(a) = -1 / (z.x₋ |> sum) * sum(
+            _y .* log.(h(a))
+            +
+            (z.x₋ - _y) .* log.(1 .- h(a))
+        )
+        opt = Optim.optimize(f, zeros(2), optalg)
+        _hy = 1 ./ (1 .+ exp.(-_N * opt.minimizer[1] .+ opt.minimizer[2]))
+
+        _hy = _y ./ z.x₋
+        _hl = sort(_hy; rev=true)
+
+        # compute the threshold risk
+        θ = 0
+        for l in _hl
+            _I = (_hy .> l)
+            _fpr = fp(_I, z)
+            if _fpr > ℓ || l < 1e-2
+                break
+            end
+            z.fpr = _fpr
+            θ = l
+        end
+
+        indices = _hy .>= θ
+
+        z.τ[.~indices] .= α₁
+        z.τ[indices] .= α₂
+        z.θ = θ
+    end
+end
+
 
 # matching rule
 function decision_matching!(
@@ -68,50 +125,5 @@ function decision_matching!(
     τv = value.(τ)
     for (id, z) in enumerate(vector_ms)
         z.τ = τv[(id-1)*_n+1:id*_n]
-    end
-end
-
-# matching rule
-function decision_matching_lh!(
-    vector_ms::Vector{MarkovState{R,Tx}},
-    vec_Ψ::Vector{BidiagSys{Tx,Tm}};
-    args=nothing,
-    ℓ=0.05,
-    kwargs...
-) where {R,Tx,Tm}
-    cₜ, α₁, α₂, _... = args
-    # at this model, we use logistic regression to 
-    # match X^{-1}y to N, the number of records
-    for (id, z) in enumerate(vector_ms)
-        _y = z.y
-        _N = [0:z.n-1...]
-        h(a) = 1 ./ (1 .+ exp.(-_N * a[1] .+ a[2]))
-        f(a) = -1 / (z.x₋ |> sum) * sum(
-            _y .* log.(h(a))
-            +
-            (z.x₋ - _y) .* log.(1 .- h(a))
-        )
-        opt = Optim.optimize(f, zeros(2), optalg)
-        _hy = 1 ./ (1 .+ exp.(-_N * opt.minimizer[1] .+ opt.minimizer[2]))
-        fp(l) = (_hy .> l)' * (z.x₋ - _y) / sum(z.x₋ - _y)
-        tn(l) = (_hy .< l)' * (z.x₋ - _y) / sum(z.x₋ - _y)
-
-        _hy = _y ./ z.x₋
-        _hl = sort(_hy; rev=true)
-
-        # compute the threshold risk
-        θ = 0
-        for l in _hl
-            if fp(l) > ℓ || l < 1e-2
-                break
-            end
-            θ = l
-        end
-
-        indices = _hy .>= θ
-
-        z.τ[.~indices] .= α₁
-        z.τ[indices] .= α₂
-        z.θ = θ
     end
 end

@@ -41,6 +41,7 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
     f::Real             # objective value of the mixed-in function
     β::Real             # group size
     θ::Real             # cutoff risk value
+    fpr::Real           # false positive rate, if applicable
     # use random initial condition
     MarkovState(
         k, n::Int;
@@ -61,6 +62,7 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
         this.τ = copy(τ);
         this.f = 1e4;
         this.θ = 0.0;
+        this.fpr = 0.0;
         return this
     )
 end

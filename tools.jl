@@ -13,7 +13,7 @@ function plot_convergence(ε, s)
                 pl, 1:kₑ,
                 vv[1:kₑ],
                 label=fname,
-                title="group-$id",
+                title="group-$id: " * L"$\alpha_1: %$(cc.α₁), \alpha_2: %$(cc.α₂)$",
                 legend_column=length(metrics)
             )
         end
@@ -39,10 +39,11 @@ function plot_convergence(ε, s)
         titlefontsize=25,
         extra_plot_kwargs=KW(
             :include_mathjax => "cdn",
-        ),)
-    savefig(fig, "$(cc.result_dir)/$style_name-convergence.$format")
-
-    @info "write to" "$(cc.result_dir)/$style_name-convergence.$format"
+        ),
+        layout=@layout([° °; _ °])
+    )
+    savefig(fig, "$(cc.result_dir)/convergence.$format")
+    @info "write to" "$(cc.result_dir)/convergence.$format"
 end
 
 function generate_Ω(N, n, ℜ)

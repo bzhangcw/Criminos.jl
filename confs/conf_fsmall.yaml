@@ -10,8 +10,9 @@ style_retention: "rand"
 style_correlation: "uppertriangular"
 # function name to generate the correlation matrix rate,
 # "rand"   - for uniform distribution  U(0,1)
-# "normal" - for normal  distribution  N(0,1)
+# "randn"  - for normal  distribution  N(0,1)
 style_correlation_seed: "rand"
+# style_correlation_seed: "randn"
 # whether or not to guarantee the positive definiteness
 #   of the correlation matrix, if true,
 #   then the reduced correlation for y is psd,
@@ -32,8 +33,8 @@ style_mixin: "mixed_in_gnep_best!"
 style_decision: "decision_matching_lh!"
 # α₁, α₂ are the parameters for the decision function
 #   if using the low-high 2-group rule to set τ
-α₁: 0.2
-α₂: 0.8
+α₁: 1e-1
+α₂: 2e-1
 
 # ---------------------------------------
 # bool options, true or false

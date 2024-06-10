@@ -1,21 +1,16 @@
 
 module CriminosConfigs
 using Base.Filesystem, Dates, YAML, Criminos
-f_config = nothing
-if length(ARGS) == 0
-    println("using configuration file: conf.yaml")
-    f_config = "conf.yaml"
-else
-    println("using configuration file: $(ARGS[1])")
-    f_config = ARGS[1]
-end
+
+
+f_config = haskey(ENV, "CRIMINOS_CONF") ? ENV["CRIMINOS_CONF"] : "confs/conf.yaml"
+alias = haskey(ENV, "CRIMINOS_ALIAS") ? ENV["CRIMINOS_ALIAS"] : nothing
 
 # get the current date and format it as yyyymmdd
 current_date = Dates.format(now(), "yyyymmdd/HHMMSS")
-
 # Create the folder
 folder_name = current_date
-result_dir = "result-$folder_name"
+result_dir = isnothing(alias) ? "result-$folder_name" : "result-$(folder_name[1:8])/$alias"
 mkpath(result_dir)
 
 println(repeat("-", 80))

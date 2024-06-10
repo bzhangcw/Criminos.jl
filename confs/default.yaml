@@ -10,8 +10,9 @@ style_retention: "rand"
 style_correlation: "uppertriangular"
 # function name to generate the correlation matrix rate,
 # "rand"   - for uniform distribution  U(0,1)
-# "normal" - for normal  distribution  N(0,1)
+# "randn"  - for normal  distribution  N(0,1)
 style_correlation_seed: "rand"
+# style_correlation_seed: "randn"
 # whether or not to guarantee the positive definiteness
 #   of the correlation matrix, if true,
 #   then the reduced correlation for y is psd,

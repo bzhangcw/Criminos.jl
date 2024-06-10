@@ -27,3 +27,7 @@ function θ(z, z₊; p=1)
     return z.θ
 end
 
+function fpr(z, z₊; p=1)
+    return z.fpr
+end
+

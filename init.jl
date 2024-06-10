@@ -69,5 +69,6 @@ if cc.bool_init
         # Criminos.∑τ => L"$\sum \tau$",
         Criminos.∑x => L"$\sum x$",
         Criminos.θ => L"$\theta$",
+        Criminos.fpr => L"\textrm{FPR}",
     )
 end
