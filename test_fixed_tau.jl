@@ -22,13 +22,13 @@ include("./conf.jl")
 #     exit(0)
 # end
 include("./init.jl")
-include("tools_traj.jl")
+include("tools.jl")
 
 series_color = palette(:default)
 series_size = length(series_color)
 ################################################################################
 
-if bool_compute
+if cc.bool_compute
     # store the runs by equilibrium
     runs = Dict()
     pops = Dict()

@@ -11,7 +11,7 @@ The dynamics of the system is,
 ```
 The main fixed-point iteration is at,
 ```@docs
-Criminos.F
+Criminos.F!
 ```
 
 We define two data structs:
@@ -120,11 +120,4 @@ Then the energy can we rewritten as,
 Population is still independent,
 ```math
 \forall \nu, \quad u^\nu(x^\nu, y_k^\nu) = \frac{1}{2}(x^\nu)^T(I - \Gamma^\nu)x^\nu - (\lambda^\nu)^T x^\nu + (x^\nu)^T \hat{\Gamma}^\nu y_k^\nu
-```
-
-
-
-## Index
-
-```@index
 ```

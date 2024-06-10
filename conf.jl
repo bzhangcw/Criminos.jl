@@ -1,58 +1,70 @@
-using Dates
-using Base.Filesystem
+
+module CriminosConfigs
+using Base.Filesystem, Dates, YAML, Criminos
+
+
+f_config = haskey(ENV, "CRIMINOS_CONF") ? ENV["CRIMINOS_CONF"] : "confs/conf.yaml"
+alias = haskey(ENV, "CRIMINOS_ALIAS") ? ENV["CRIMINOS_ALIAS"] : nothing
 
 # get the current date and format it as yyyymmdd
-current_date = Dates.format(now(), "yyyymmddHHMM")
-
+current_date = Dates.format(now(), "yyyymmdd/HHMMSS")
 # Create the folder
 folder_name = current_date
-
-################################################################################
-# !!!todo, change to argparse
-################################################################################
-result_dir = "result-$folder_name"
+result_dir = isnothing(alias) ? "result-$folder_name" : "result-$(folder_name[1:8])/$alias"
 mkpath(result_dir)
 
 println(repeat("-", 80))
 println("result_dir: $result_dir")
 println(repeat("-", 80))
+variables_from_yaml = YAML.load_file(f_config)
+variables_from_yaml["output_dir"] = result_dir
+style_retention = Symbol(variables_from_yaml["style_retention"])
+style_correlation = Symbol(variables_from_yaml["style_correlation"])
+style_correlation_seed = eval(variables_from_yaml["style_correlation_seed"] |> Symbol)
+style_correlation_psd = variables_from_yaml["style_correlation_psd"]
+style_correlation_subp = variables_from_yaml["style_correlation_subp"]
+style_mixin = getfield(Criminos, Symbol(variables_from_yaml["style_mixin"]))
+style_mixin_name = style_mixin |> nameof
+style_decision = getfield(Criminos, Symbol(variables_from_yaml["style_decision"]))
+style_decision_name = style_decision |> nameof
+bool_use_html = variables_from_yaml["bool_use_html"]
+bool_init = variables_from_yaml["bool_init"]
+bool_conv = variables_from_yaml["bool_conv"]
+bool_compute = variables_from_yaml["bool_compute"]
+bool_plot_trajectory = variables_from_yaml["bool_plot_trajectory"]
+bool_plot_surface = variables_from_yaml["bool_plot_surface"]
+α₁ = variables_from_yaml["α₁"]
+α₂ = variables_from_yaml["α₂"]
+seed_number = variables_from_yaml["seed_number"]
+R = variables_from_yaml["R"]
+group_size = variables_from_yaml["group_size"]
+group_new_ratio = variables_from_yaml["group_new_ratio"]
+end
+
+cc = CriminosConfigs
 correlation_styles = [
     :none,
     :diagonal,
     :uppertriangular,
     :symmetric
 ]
-style_retention = :rand
-style_correlation = :uppertriangular
-style_correlation_seed = rand
-style_correlation_psd = true # whether to ensure psd
-style_correlation_subp = true # whether to use subpopulation correlation
-style_mixin = Criminos.mixed_in_gnep_best!
-style_mixin_name = style_mixin |> nameof
-# style_decision = Criminos.decision_matching_lh
-style_decision = Criminos.decision_identity
-style_decision_name = style_decision |> nameof
 
 style_arr = (
-    style_retention,
-    style_correlation,
-    style_correlation_subp,
-    style_mixin_name,
-    style_decision_name
+    cc.style_retention,
+    cc.style_correlation,
+    cc.style_correlation_subp,
+    cc.style_mixin_name,
+    cc.style_decision_name
 )
-style_name = Printf.format(join(["%s" for _ in style_arr], "-") |> Printf.Format, style_arr...)
-style_disp = Printf.format(join(["- %s" for _ in style_arr], "\n") |> Printf.Format, style_arr...)
+
+style_name = @sprintf "%s" cc.style_decision_name
 
 println(repeat("-", 80))
-println("style_name:\n$style_disp")
+println("Simulation Style Configs:\n")
+display(sort(cc.variables_from_yaml))
 println(repeat("-", 80))
 
-bool_use_html = true
-bool_init = true
-bool_compute = true
-bool_plot_trajectory = true
-bool_plot_surface = false
-if bool_use_html
+if cc.bool_use_html
     plotlyjs()
     format = "html"
 else
@@ -64,9 +76,10 @@ ratio_group = 1 # ratio of trajectories to be plotted
 # -----------------------------------------------------------------------------
 # problem size
 # -----------------------------------------------------------------------------
-Random.seed!(5)
-K = 10000           # number of maximum iterations
+Random.seed!(cc.seed_number)
+K = 2000           # number of maximum iterations
 n = 8               # state size: 0, 1, ..., n-1
 # number of subpopulations
-ℜ = 2
-group_size = [1:5:5*ℜ...]
+ℜ = cc.R
+group_size = cc.group_size
+group_new_ratio = cc.group_new_ratio

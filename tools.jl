@@ -1,18 +1,10 @@
-using LinearAlgebra, SparseArrays
+using LinearAlgebra, SparseArrays, Arpack
 
 function plot_convergence(ε, s)
     pls = []
     for id in 1:s
         pl = plot(
-            size=(700 * s, 500),
-            labelfontsize=20,
-            xtickfont=font(25),
-            ytickfont=font(25),
-            legendfontsize=25,
-            titlefontsize=25,
-            extra_plot_kwargs=KW(
-                :include_mathjax => "cdn",
-            ),
+            size=(700 * (s), 900),
         )
         for (func, fname) in metrics
             vv = ε[id, fname]
@@ -20,43 +12,67 @@ function plot_convergence(ε, s)
             plot!(
                 pl, 1:kₑ,
                 vv[1:kₑ],
-                label=fname
+                label=fname,
+                title="group-$id: " * L"$\alpha_1: %$(cc.α₁), \alpha_2: %$(cc.α₂)$",
+                legend_column=length(metrics)
             )
         end
         push!(pls, pl)
     end
-    fig = plot(pls...)
-    title!(fig, "Convergence of the metrics")
-    savefig(fig, "$result_dir/$style_name-convergence.$format")
-
-    @info "write to" "$result_dir/$style_name-convergence.$format"
+    pl = plot(
+        size=(700 * (s), 900),
+    )
+    # plot!(
+    #     pl, 1:2,
+    #     1:2,
+    #     label="",
+    #     alpha=0.0
+    # )
+    push!(pls, pl)
+    fig = plot(pls...,
+        legend=:bottom,
+        labelfontsize=20,
+        xtickfont=font(25),
+        ytickfont=font(25),
+        # xscale=:log2,
+        legendfontsize=25,
+        titlefontsize=25,
+        extra_plot_kwargs=KW(
+            :include_mathjax => "cdn",
+        ),
+        layout=@layout([° °; _ °])
+    )
+    savefig(fig, "$(cc.result_dir)/convergence.$format")
+    @info "write to" "$(cc.result_dir)/convergence.$format"
 end
 
 function generate_Ω(N, n, ℜ)
     G = blockdiag([sparse(Ψ.Γₕ' * inv(I - Ψ.Γ) * Ψ.Γₕ) for Ψ in vec_Ψ]...)
-    if style_correlation == :uppertriangular
-        ∇₀ = style_correlation_seed(N, N)
-        ∇ₜ = UpperTriangular(style_correlation_seed(N, N))
-        Hₜ = Symmetric(style_correlation_seed(N, N))
+    D, _ = eigs(G)
+    D = real(D)
+    if cc.style_correlation == :uppertriangular
+        ∇₀ = Matrix(G)
+        ∇ₜ = UpperTriangular(cc.style_correlation_seed(N, N))
+        Hₜ = Symmetric(cc.style_correlation_seed(N, N))
         Hₜ = Hₜ' * Hₜ
         # this is the lower bound to
         #   guarantee the uniqueness of NE
         H₀ = (
-            style_correlation_psd ? G + 1e-3 * I(N) : zeros(N, N)
+            cc.style_correlation_psd ? G + 1e-3 * I(N) : zeros(N, N)
         )
         Ω = (∇₀, H₀, ∇ₜ, Hₜ)
-    elseif style_correlation == :diagonal
+    elseif cc.style_correlation == :diagonal
         # uncorrelated case
         ∇₀ = Diagonal(style_correlation_seed(N, N))
         ∇ₜ = Diagonal(style_correlation_seed(N, N))
         Hₜ = Diagonal(style_correlation_seed(N, N))
         Hₜ = Hₜ' * Hₜ
-        H₀ = style_correlation_psd ? (opnorm(G) + 1e-3) * I(N) : zeros(N, N)
+        H₀ = cc.style_correlation_psd ? (opnorm(G) + 1e-3) * I(N) : zeros(N, N)
         Ω = (∇₀, H₀, ∇ₜ, Hₜ)
     else
         throw(ErrorException("not implemented"))
     end
-    if !style_correlation_subp
+    if !cc.style_correlation_subp
         Hₜ = blockdiag([sparse(Hₜ[(id-1)*n+1:id*n, (id-1)*n+1:id*n]) for id in 1:ℜ]...)
         Ω = (∇₀, H₀, ∇ₜ, Hₜ)
     end

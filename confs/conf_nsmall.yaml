@@ -1,0 +1,56 @@
+# author: CZ, 2024
+# date: 2024-05-01
+# version: 0.1.0
+# @note: specifying how the simulation is run.
+# ---------------------------------------
+# style options, to specify the system
+# ---------------------------------------
+# how to generate the rention rate, γ in the paper
+style_retention: "rand"
+style_correlation: "uppertriangular"
+# function name to generate the correlation matrix rate,
+# "rand"   - for uniform distribution  U(0,1)
+# "randn"  - for normal  distribution  N(0,1)
+style_correlation_seed: "rand"
+# style_correlation_seed: "randn"
+# whether or not to guarantee the positive definiteness
+#   of the correlation matrix, if true,
+#   then the reduced correlation for y is psd,
+#   the equibrium is unique
+style_correlation_psd: true
+# whether or not to add correlation to subpopulations,
+#  if true, then the correlation is added to subpopulations
+#  otherwise, the correlation matrix is block diagonal
+style_correlation_subp: false
+# mixed-in function, default is the GNEP potential minimization
+style_mixin: "mixed_in_gnep_best!"
+# decision functions,
+# - decision_null!       : do nothing, keep as 0 (default)
+# - decision_identity!   : do nothing, keep as initial (default)
+# - decision_matching_lh!: apply a 0-1 matching/classification law
+# style_decision: "decision_null!"
+style_decision: "decision_identity!"
+# style_decision: "decision_matching_lh!"
+# α₁, α₂ are the parameters for the decision function
+#   if using the low-high 2-group rule to set τ
+α₁: 1e-1
+α₂: 2e-1
+
+# ---------------------------------------
+# bool options, true or false
+# ---------------------------------------
+bool_use_html: true
+bool_init: true
+bool_conv: true
+bool_compute: false
+bool_plot_trajectory: false
+bool_plot_surface: false
+
+# ---------------------------------------
+# real number options
+# ---------------------------------------
+# set random seed to generate random matrices, for reproducibility.
+seed_number: 5
+R: 2
+group_size: [1, 6]
+group_new_ratio: [1, 4]

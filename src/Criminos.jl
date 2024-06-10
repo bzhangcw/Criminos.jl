@@ -17,6 +17,7 @@ mutable struct GNEPMixinOption
     is_kl::Bool
     model::Union{Nothing,Model}
 end
+
 mutable struct XInitHelper
     x::Union{Nothing,Any}
     ρ::Union{Nothing,Any}
@@ -26,12 +27,20 @@ mutable struct XInitHelper
     c2::Union{Nothing,Any}
 end
 
+mutable struct DecisionOption
+    τ::Union{Nothing,Any}
+    τcon::Union{Nothing,Any}
+    is_setup::Bool
+    model::Union{Nothing,Model}
+end
+
 const GRB_ENV = Ref{Gurobi.Env}()
+default_barrier_option = BarrierOption(0.01)
 default_gnep_mixin_option = Ref{GNEPMixinOption}()
 default_xinit_option = Ref{XInitHelper}()
-default_barrier_option = BarrierOption(0.01)
+default_decision_option = Ref{DecisionOption}()
 function __init__()
-    global default_gnep_mixin_option, default_xinit_option
+    global default_gnep_mixin_option, default_xinit_option, default_decision_option
     if USE_GUROBI
         GRB_ENV[] = Gurobi.Env()
         _md = Model(optimizer_with_attributes(
@@ -47,7 +56,10 @@ function __init__()
             _md
         )
     else
-        _md = Model(optimizer_with_attributes(
+        _md = USE_KL ? Model(optimizer_with_attributes(
+            () -> Ipopt.Optimizer(),
+            "print_level" => 0
+        )) : Model(optimizer_with_attributes(
             () -> HiGHS.Optimizer(),
             "log_to_console" => false
         ))
@@ -76,9 +88,25 @@ function __init__()
         nothing,
         nothing
     )
+    default_decision_option = DecisionOption(
+        nothing,
+        nothing,
+        false,
+        # Model(optimizer_with_attributes(
+        #     () -> Ipopt.Optimizer(),
+        #     "print_level" => 0
+        # ))
+        Model(optimizer_with_attributes(
+            () -> HiGHS.Optimizer(),
+            "log_to_console" => false
+        ))
+    )
 end
 
-export default_barrier_option, default_gnep_mixin_option, default_xinit_option
+export default_barrier_option
+export default_gnep_mixin_option
+export default_xinit_option
+export default_decision_option
 
 ##################################################
 # sigfault when using constant env here.
@@ -100,7 +128,9 @@ function simulate(
     vector_ms::Vector{MarkovState{R,TR}},
     vec_Ψ,
     Fp;
-    K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL], bool_opt=true
+    K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL],
+    bool_verbose=false,
+    bool_opt=true
 ) where {R,TR}
     ε = Dict()
     # --------------------------------------------------
@@ -114,14 +144,14 @@ function simulate(
     for k::Int in 1:K
         push!(traj, Vz)
         _Vz = copy.(Vz)
-        # FP iteration;
+        # FP iteration
         Fp(_Vz)
         for (id, z) in enumerate(_Vz)
             # cal FP residual
             eps[id] = norm(Vz[id].z - z.z)
         end
         kₑ = k
-        if maximum(eps) < 1e-7
+        if maximum(eps) < 1e-5
             @info "converged in $kₑ steps"
             break
         end
@@ -140,5 +170,6 @@ end
 
 export MarkovState
 export BidiagSys
-export F
+export F!
+export optalg
 end # module Criminos
