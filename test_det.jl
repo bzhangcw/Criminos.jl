@@ -1,3 +1,6 @@
+# a script to test the optimization for fitting 
+# the correct deterrence parameters
+
 using ForwardDiff
 using LinearAlgebra
 using Random
@@ -47,8 +50,15 @@ fig = plot(
     legend=:topright,
     legendfonthalign=:left,
 )
-plot!(1:n, ρₛ, label=L"$\rho_s$")
-plot!(1:n, traj[end][1].ρ, label=L"$\bar{x}/\bar{y}$")
+plot!(
+    1:n, ρₛ, label=L"$\rho_s$",
+    linewidth=2,
+)
+plot!(
+    1:n, traj[end][1].ρ, label=L"$\bar{x}/\bar{y}$",
+    linewidth=2,
+    linestyle=:dot,
+)
 savefig(
     fig, "$(cc.result_dir)/fitting.$format"
 )
