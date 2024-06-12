@@ -49,14 +49,33 @@ if cc.bool_init
         z = vec_z[idx]
         vec_z[idx].x .= Ψ.λ + Ψ.Γ * z.x₋ - Ψ.Γₕ * z.y
     end
+
     # generate data for ℜ population
     N = n * ℜ
-    Ω, G = generate_Ω(N, n, ℜ)
+    _args = nothing
+    # ρₛ = [1:n...] ./ n ./ 2
+    ρₛ = rand(n)
+    Uₛ = rand(n, n)
+    Σ = rand(n, n)
+    Σ = Σ' * Σ + 1e-2 * I
+    if cc.style_mixin_parameterization == :random
+        _args = generate_random_Ω(N, n, ℜ)
+    elseif cc.style_mixin_parameterization == :fitting
+        _args = generate_fitting_Ω(
+            N, n, ℜ;
+            ρₛ=ρₛ,
+            τₛ=vec_z[1].τ,
+            Uₛ=Uₛ,
+            Σ=Σ,
+            bool_type1=false
+        )
+    else
+    end
     cₜ = rand(n)
     Fp(vec_z) = F!(
         vec_z, vec_Ψ;
         fₜ=cc.style_decision, targs=(cₜ, cc.α₁, cc.α₂),
-        fₘ=cc.style_mixin, margs=Ω,
+        fₘ=cc.style_mixin, margs=_args,
     )
 
     ################################################################################

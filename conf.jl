@@ -24,6 +24,7 @@ style_correlation_seed = eval(variables_from_yaml["style_correlation_seed"] |> S
 style_correlation_psd = variables_from_yaml["style_correlation_psd"]
 style_correlation_subp = variables_from_yaml["style_correlation_subp"]
 style_mixin = getfield(Criminos, Symbol(variables_from_yaml["style_mixin"]))
+style_mixin_parameterization = Symbol(variables_from_yaml["style_mixin_parameterization"])
 style_mixin_name = style_mixin |> nameof
 style_decision = getfield(Criminos, Symbol(variables_from_yaml["style_decision"]))
 style_decision_name = style_decision |> nameof

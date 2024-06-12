@@ -21,32 +21,6 @@ dist = _dist_quad
 # u(x) without externality
 L(x, Ψ) = 1 / 2 * x' * (I - Ψ.Γ) * x - x' * Ψ.λ
 
-# w(x) without externality
-# linear quadratic function
-"""
-    linear quadratic function
-"""
-function w_linearquad(
-    y, _τ, _c, args;
-    baropt=default_barrier_option,
-    kwargs...
-)
-    ∇₀, H₀, ∇ₜ, Hₜ, _... = args
-    _t = _τ .+ 1
-    _T = diagm(_τ)
-    # Cₜ = diagm(_τ) * Hₜ * diagm(_τ) + H₀
-    # cₜ = (∇ₜ*_τ)[:] - (∇₀*_c)[:]
-    Cₜ = _T * (Hₜ) * _T + H₀
-    cₜ = -(∇ₜ*_t)[:] - (Cₜ*∇₀*_c)[:]
-    _w = (
-        y' * Cₜ * y / 2 +    # second-order
-        y' * cₜ             # first-order
-    )
-    ∇ = Cₜ * y + cₜ
-    return _w, ∇, 0.0
-end
-w = w_linearquad
-
 
 @doc raw"""
     best response for the GNEP problem 
@@ -92,28 +66,29 @@ function mixed_in_gnep_best!(
         #     1e-1 * _y' * log.(_y .+ 1e-3) + (_x - _y)' * log.(_x - _y) <= _x' * log.(_x / 2) + 0.5 * sum(_x)
         # )
 
-        _ycon = @constraint(
-            model,
-            # log.(_x - _y) .>= log.(_x / 10) * 0.5
-            _y .<= _x .* (1 - √exp(1) / 10)
-        )
+        # _ycon = @constraint(
+        #     model,
+        #     # log.(_x - _y) .>= log.(_x / 10) * 0.5
+        #     _y .<= _x .* (1 - √exp(1) / 10)
+        # )
 
         # _tol = round.(0.1 .* (_x₋ .+ 1e-4) .* z.y; digits=2)
         # _ycon = @constraint(
         #     model,
         #     (_x₋ .+ 1e-4) .* _y - round.((_x₋ .+ 1e-4) .* (2 * _Ψ.Γ - _Ψ.Γₕ) * z.y - _Ψ.Γ * (z.y .^ 2); digits=2) .<= _tol
         # )
-        push!(ycons, _ycon)
+        # push!(ycons, _ycon)
         # else
         # end
         # _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y + _Ψ.Q * _Ψ.λ) / baropt.μ
         _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y) / baropt.μ
     end
     # repeat the blocks
-    _c = vcat([Ψ.Q * Ψ.λ for Ψ in vector_Ψ]...)
     _τ = vcat([z.τ .* z.β for z in vector_ms]...)
     ##################################################
-    _w, ∇, ∇² = w(y, _τ, _c, args; baropt=baropt)
+    # unpacking args,
+    ω∇ω, G, _... = args
+    _w, ∇ω = ω∇ω(y, _τ)
     # add proximal term and the externality term
     _f_expr = _φ + _w
     @objective(model, Min, _f_expr)

@@ -2,7 +2,7 @@
 
 julia_version = "1.8.5"
 manifest_format = "2.0"
-project_hash = "9c01235bbfdff051ceab60d7e787d5f0b8659e44"
+project_hash = "a63276037ee28caee40cda5b011fce244d416842"
 
 [[deps.ASL_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -77,6 +77,12 @@ deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
 git-tree-sha1 = "9e2a6b69137e6969bab0152632dcb3bc108c8bdd"
 uuid = "6e34b625-4abd-537c-b88f-471c36dfa7a0"
 version = "1.0.8+1"
+
+[[deps.COPT]]
+deps = ["LazyArtifacts", "Libdl", "LinearAlgebra", "MathOptInterface", "Pkg", "Random", "SparseArrays"]
+git-tree-sha1 = "df3aaab5437674d26735b3392c930678b28e365a"
+uuid = "227a2e2d-e949-4d8e-a1da-7384fe6f0b9f"
+version = "1.1.17"
 
 [[deps.CSV]]
 deps = ["CodecZlib", "Dates", "FilePathsBase", "InlineStrings", "Mmap", "Parsers", "PooledArrays", "PrecompileTools", "SentinelArrays", "Tables", "Unicode", "WeakRefStrings", "WorkerUtilities"]
@@ -182,6 +188,12 @@ version = "0.6.2"
 git-tree-sha1 = "249fe38abf76d48563e2f4556bebd215aa317e15"
 uuid = "a8cc5b0e-0ffa-5ad4-8c14-923d3ee1735f"
 version = "4.1.1"
+
+[[deps.CxxWrap]]
+deps = ["Libdl", "MacroTools", "libcxxwrap_julia_jll"]
+git-tree-sha1 = "3345cb637ca1efb2ebf7f5145558522b92660d1f"
+uuid = "1f15a43c-97ca-5a2a-ae31-89f07a497df4"
+version = "0.14.2"
 
 [[deps.DataAPI]]
 git-tree-sha1 = "abe83f3a2f1b857aac70ef8b269080af17764bbe"
@@ -990,6 +1002,30 @@ git-tree-sha1 = "3fe4e5b9cdbb9bbc851c57b149e516acc07f8f72"
 uuid = "295af30f-e4ad-537b-8983-00126c2a3abe"
 version = "3.5.13"
 
+[[deps.SCS]]
+deps = ["MathOptInterface", "Requires", "SCS_jll", "SparseArrays"]
+git-tree-sha1 = "940b069bb150151cba9b12a1ea8678f60f324e7a"
+uuid = "c946c3f1-0d1f-5ce8-9dea-7daa1f7e2d13"
+version = "2.0.0"
+
+[[deps.SCS_jll]]
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "LLVMOpenMP_jll", "Libdl", "OpenBLAS32_jll"]
+git-tree-sha1 = "f7765a35d074b3b357aa6d84e732bbcda150f909"
+uuid = "f4f2fc5b-1d94-523c-97ea-2ab488bedf4b"
+version = "3.2.4+1"
+
+[[deps.SDPA]]
+deps = ["CxxWrap", "LinearAlgebra", "MathOptInterface", "SDPA_jll"]
+git-tree-sha1 = "02cd33e060ba4d639806b613f2e51a3ca0811d97"
+uuid = "b9a10b5b-afa4-512f-a053-bb3d8080febc"
+version = "0.5.1"
+
+[[deps.SDPA_jll]]
+deps = ["Artifacts", "CompilerSupportLibraries_jll", "JLLWrappers", "Libdl", "OpenBLAS32_jll", "libcxxwrap_julia_jll"]
+git-tree-sha1 = "e95fc4710ee0cbc4be6ca76dfce652677b8ab941"
+uuid = "7fc90fd6-dbef-5a6a-93f8-169f2a2e705b"
+version = "700.300.1701+1"
+
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 version = "0.7.0"
@@ -1426,6 +1462,12 @@ version = "0.15.1+0"
 deps = ["Artifacts", "Libdl", "OpenBLAS_jll"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
 version = "5.1.1+0"
+
+[[deps.libcxxwrap_julia_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "02d0a0a623248c709727088aaf722ab14f1463a5"
+uuid = "3eaa8342-bff7-56a5-9981-c04077f7cee7"
+version = "0.11.2+1"
 
 [[deps.libevdev_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]

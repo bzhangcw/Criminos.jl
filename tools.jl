@@ -22,12 +22,6 @@ function plot_convergence(ε, s)
     pl = plot(
         size=(700 * (s), 900),
     )
-    # plot!(
-    #     pl, 1:2,
-    #     1:2,
-    #     label="",
-    #     alpha=0.0
-    # )
     push!(pls, pl)
     fig = plot(pls...,
         legend=:bottom,
@@ -37,46 +31,14 @@ function plot_convergence(ε, s)
         # xscale=:log2,
         legendfontsize=25,
         titlefontsize=25,
-        extra_plot_kwargs=KW(
+        extra_plot_kwargs=cc.bool_use_html ? KW(
             :include_mathjax => "cdn",
-        ),
+        ) : Dict(),
         layout=@layout([° °; _ °])
     )
     savefig(fig, "$(cc.result_dir)/convergence.$format")
     @info "write to" "$(cc.result_dir)/convergence.$format"
-end
 
-function generate_Ω(N, n, ℜ)
-    G = blockdiag([sparse(Ψ.Γₕ' * inv(I - Ψ.Γ) * Ψ.Γₕ) for Ψ in vec_Ψ]...)
-    D, _ = eigs(G)
-    D = real(D)
-    if cc.style_correlation == :uppertriangular
-        ∇₀ = Matrix(G)
-        ∇ₜ = UpperTriangular(cc.style_correlation_seed(N, N))
-        Hₜ = Symmetric(cc.style_correlation_seed(N, N))
-        Hₜ = Hₜ' * Hₜ
-        # this is the lower bound to
-        #   guarantee the uniqueness of NE
-        H₀ = (
-            cc.style_correlation_psd ? G + 1e-3 * I(N) : zeros(N, N)
-        )
-        Ω = (∇₀, H₀, ∇ₜ, Hₜ)
-    elseif cc.style_correlation == :diagonal
-        # uncorrelated case
-        ∇₀ = Diagonal(style_correlation_seed(N, N))
-        ∇ₜ = Diagonal(style_correlation_seed(N, N))
-        Hₜ = Diagonal(style_correlation_seed(N, N))
-        Hₜ = Hₜ' * Hₜ
-        H₀ = cc.style_correlation_psd ? (opnorm(G) + 1e-3) * I(N) : zeros(N, N)
-        Ω = (∇₀, H₀, ∇ₜ, Hₜ)
-    else
-        throw(ErrorException("not implemented"))
-    end
-    if !cc.style_correlation_subp
-        Hₜ = blockdiag([sparse(Hₜ[(id-1)*n+1:id*n, (id-1)*n+1:id*n]) for id in 1:ℜ]...)
-        Ω = (∇₀, H₀, ∇ₜ, Hₜ)
-    end
-    return Ω, G
 end
 
 
@@ -98,9 +60,9 @@ function plot_trajectory(
         yscale=:log2,
         size=(1800, 1200),
         title="Trajectory by $style_name[1:10]",
-        extra_plot_kwargs=KW(
+        extra_plot_kwargs=cc.bool_use_html ? KW(
             :include_mathjax => "cdn",
-        ),
+        ) : Dict(),
     )
     annotated = Set()
     for (neidx, (key, trajs)) in enumerate(pops)
@@ -140,7 +102,7 @@ function plot_trajectory(
 
             # write out a DataFrame to csv file
             df = DataFrame(cc[2:end, :], :auto)
-            CSV.write("$(style_retention)-$(style_mixin_name)-data.csv", df)
+            CSV.write("$(cc.result_dir)/traj-data.csv", df)
         end
         annot = key[1:2]
         if annot in annotated

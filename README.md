@@ -9,3 +9,7 @@
 [docs-dev-url]: https://bzhangcw.github.io/Criminos.jl/dev
 
 
+
+# Dependency
+
+We require optimization solvers to run best-response dynamics and 
