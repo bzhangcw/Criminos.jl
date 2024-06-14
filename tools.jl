@@ -121,3 +121,7 @@ function plot_trajectory(
     @info "Writing out $style_name-quiver.csv"
     return fig3
 end
+
+
+# some empirical distribution tools
+unimodal(n) = [sqrt(exp(-abs(j - n / 3.7))) for j in 1:n]

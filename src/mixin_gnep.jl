@@ -35,7 +35,8 @@ function mixed_in_gnep_best!(
     baropt=default_barrier_option,
     kwargs...
 ) where {R,Tx,Tm}
-
+    # unpacking args,
+    ω∇ω, G, ι, _... = args
     _n = vector_ms[1].n
     _N = _n * length(vector_ms)
     model = default_gnep_mixin_option.model
@@ -58,20 +59,18 @@ function mixed_in_gnep_best!(
         _Ψ = vector_Ψ[id]
 
         # set upper bound
-        set_upper_bound.(_y, _x)
+        set_upper_bound.(_y, _x .* ι)
         # if default_gnep_mixin_option.is_kl
         # if use smooth box constraint
         # _ycon = @constraint(
         #     model,
         #     1e-1 * _y' * log.(_y .+ 1e-3) + (_x - _y)' * log.(_x - _y) <= _x' * log.(_x / 2) + 0.5 * sum(_x)
         # )
-
         # _ycon = @constraint(
         #     model,
         #     # log.(_x - _y) .>= log.(_x / 10) * 0.5
-        #     _y .<= _x .* (1 - √exp(1) / 10)
+        #     _y .<= _x .* cc.ι
         # )
-
         # _tol = round.(0.1 .* (_x₋ .+ 1e-4) .* z.y; digits=2)
         # _ycon = @constraint(
         #     model,
@@ -80,16 +79,12 @@ function mixed_in_gnep_best!(
         # push!(ycons, _ycon)
         # else
         # end
-        # _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y + _Ψ.Q * _Ψ.λ) / baropt.μ
         _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y) / baropt.μ
     end
     # repeat the blocks
     _τ = vcat([z.τ .* z.β for z in vector_ms]...)
     ##################################################
-    # unpacking args,
-    ω∇ω, G, _... = args
     _w, ∇ω = ω∇ω(y, _τ)
-    # add proximal term and the externality term
     _f_expr = _φ + _w
     @objective(model, Min, _f_expr)
     ##################################################
@@ -131,34 +126,6 @@ function mixed_in_gnep_grad!(
     kwargs...
 )
     throw(ErrorException("not implemented correctly"))
-    # _x = z.z[1:z.n]
-    # 
-    # _τ = z.τ
-    # _y = _x .* _r
-    # d = _x |> length
-    # _x =  * _x + Ψ.λ
-    # z.f = 0.0 # unused
-    # # we let y proceed a gradient step
-    # _ψ, _ = ψ(_x, _r, , _τ, args; Ψ=Ψ, baropt=baropt)
-    # # add cross term
-    # _φ = _ψ + Ψ.Γ' * Ψ.M' * _x
-    # u(y) = _φ' * y + dist(y, _y) / baropt.μ + y' * diagm(_τ) * C * diagm(_τ) * y / 2
-    # # do a line search
-    # α = 1 / baropt.μ
-    # _y₊ = similar(_y)
-    # _u = u(_y)
-    # while true
-    #     _y₊ = _y - α * (_φ + diagm(_τ) * C * diagm(_τ) * _y)
-    #     _y₊ = min.(max.(_y₊, 1e-3), _x .- 1e-3)
-    #     _u₊ = u(_y₊)
-    #     # @info "line search" α _u _u₊
-    #     if (_u₊ < _u) || (α < 1e-8)
-    #         break
-    #     end
-    #     α /= 1.2
-    # end
-    # _p = _y₊ ./ _x
-    # return _p
 end
 
 function pot_gnep(

@@ -15,6 +15,7 @@ using CSV, Tables, DataFrames
 ################################################################################
 include("./conf.jl")
 include("./tools.jl")
+include("./fit.jl")
 include("./init.jl")
 
 K = 10000

@@ -53,7 +53,7 @@ function generate_random_Ω(N, n, ℜ; kwargs...)
         ∇ = Cₜ * y + cₜ
         return _w, ∇
     end
-    return ω∇ω, G
+    return ω∇ω, G, cc.ι
 end
 
 @doc raw"""
@@ -64,7 +64,6 @@ fitting data to a desired distribution
 function generate_fitting_Ω(N, n, ℜ;
     ρₛ=rand(n),
     τₛ=rand(n),
-    Uₛ=rand(n, n),
     Σ=nothing,
     bool_type1=true
 )
@@ -77,34 +76,36 @@ function generate_fitting_Ω(N, n, ℜ;
     _Ψ = vec_Ψ[1]
 
 
-    expt(τ) = 1 .- exp.(-τ .^ 2)
-    T = diagm(expt(τₛ) .+ ϵ)
+    expt(τ) = 1 .- exp.(-τ .^ 2) .+ ϵ
+    T = diagm(expt(τₛ))
     invT = inv(T)
 
     md = Model(optimizer_with_attributes(
         () -> COPT.ConeOptimizer(),
     ))
-    # md = Model(COPT.Optimizer)
-    # set_attribute(md, "Mode", SDPA.PARAMETER_DEFAULT)
+
+    # ι must exceed maximum ρₛ
+    ι = max(cc.ι, ρₛ...)
     M₁ = -_Ψ.Γ + I + diagm(ρₛ) * _Ψ.Γₕ
-    M₂ = -_Ψ.Γ + I + _Ψ.Γₕ
+    M₂ = -_Ψ.Γ + I + cc.ι .* _Ψ.Γₕ
     b₁ = ρₛ .* _Ψ.λ
     θ = _Ψ.Q * _Ψ.λ
 
-    @variable(md, _Bv[1:n, 1:n] .<= 1e4, PSD)
     @variable(md, yv[1:n] .>= 0)
+    @variable(md, _bv[1:n] .>= 0)
+    @variable(md, _Bv[1:n, 1:n] .>= 0)
+    set_upper_bound.(_bv, 1e4)
+    @constraint(md, _Bv[1:n, 1:n] - diagm(_bv) .== 0)
     if bool_type1
         # quad H linear-quad g
-        @constraint(md, (θ + invT * _Bv * Σ * ones(n)) .== yv)
-        # @constraint(md, _Bv >= 0.1I, PSDCone())
-        # @constraint(md, _Bv <= 1e3I, PSDCone())
+        @constraint(md, (_Bv * invT * Σ * ones(n)) .== yv)
     else
         # linear H quad g
         @constraint(md, (_Bv * Σ * T * ones(n) + _Bv * invT * θ) .== yv)
         @constraint(md, _Bv .>= 0)
     end
     @constraint(md, M₁ * yv .== b₁)
-    @constraint(md, M₂ * yv .<= _Ψ.λ)
+    @constraint(md, M₂ * yv .<= ι .* _Ψ.λ)
     @objective(md, Max, tr(_Bv))
 
     optimize!(md)
@@ -114,13 +115,16 @@ function generate_fitting_Ω(N, n, ℜ;
     _B = value.(_Bv)
     _A = inv(_B)
 
-
-    H₁(τ) = diagm(expt(τ) .+ ϵ) * _A * inv(Σ) * _A' * diagm(expt(τ) .+ ϵ)
-    g₁(τ) = diagm(expt(τ) .+ ϵ) * _A * ones(n) + H₁(τ) * θ
+    # not stable
+    # H₁(τ) = diagm(expt(τ)) * _A * inv(Σ) * _A' * diagm(expt(τ))
+    # g₁(τ) = diagm(expt(τ)) * _A * ones(n) + H₁(τ) * θ
+    # y₁(τ) = H₁(τ) \ g₁(τ)
+    H₁(τ) = _A * diagm(expt(τ)) .^ 2 * _A'
+    g₁(τ) = _A * diagm(expt(τ)) * Σ * ones(n)
     y₁(τ) = H₁(τ) \ g₁(τ)
 
-    H₂(τ) = _A * diagm(expt(τ) .+ ϵ) * _A'
-    g₂(τ) = _A * diagm(expt(τ) .+ ϵ) * Σ * diagm(expt(τ) .+ ϵ) * ones(n) + _A * θ
+    H₂(τ) = _A * diagm(expt(τ)) * _A'
+    g₂(τ) = _A * diagm(expt(τ)) * Σ * diagm(expt(τ)) * ones(n) + _A * θ
     y₂(τ) = H₂(τ) \ g₂(τ)
 
 
@@ -131,7 +135,7 @@ function generate_fitting_Ω(N, n, ℜ;
     @info "" maximum(abs.(y ./ x - ρₛ))
     @info "" maximum(abs.(_A * _B - I)) < 1e-5
     @info "" maximum(abs.(yₕ(τₛ) .- y))
-    @info "" maximum(abs.(yₕ(τₛ .* 1000) .- θ))
+    @info "" (yₕ(τₛ .* 1000)) |> sum
 
     ω∇ω(y, τ) = begin
         _H = Hₕ(τ) + _Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.Γₕ
@@ -140,5 +144,24 @@ function generate_fitting_Ω(N, n, ℜ;
         ∇ = _H * y + _g
         _w, ∇
     end
-    return ω∇ω, G, y, x, gₕ, Hₕ, yₕ, _A, _B
+    return ω∇ω, G, ι, y, x, gₕ, Hₕ, yₕ, _A, _B
+end
+
+function tuning(n; type_monotone=true, ρₛ=nothing, τₛ=nothing)
+
+    Σ = rand(n, n)
+    Σ = Σ' * Σ + 1e-2 * I
+    if cc.style_mixin_parameterization == :random
+        _args = generate_random_Ω(N, n, ℜ)
+    elseif cc.style_mixin_parameterization == :fitting
+        _args = generate_fitting_Ω(
+            N, n, ℜ;
+            ρₛ=ρₛ,
+            τₛ=τₛ,
+            Σ=Σ,
+            bool_type1=type_monotone
+        )
+    else
+    end
+    return _args
 end

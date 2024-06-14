@@ -40,6 +40,7 @@ seed_number = variables_from_yaml["seed_number"]
 R = variables_from_yaml["R"]
 group_size = variables_from_yaml["group_size"]
 group_new_ratio = variables_from_yaml["group_new_ratio"]
+ι = (1 - √exp(1) / 10)
 end
 
 cc = CriminosConfigs
@@ -49,6 +50,9 @@ correlation_styles = [
     :uppertriangular,
     :symmetric
 ]
+
+series_color = palette(:default)
+series_size = length(series_color)
 
 style_arr = (
     cc.style_retention,
@@ -79,7 +83,7 @@ ratio_group = 1 # ratio of trajectories to be plotted
 # -----------------------------------------------------------------------------
 Random.seed!(cc.seed_number)
 K = 2000           # number of maximum iterations
-n = 8               # state size: 0, 1, ..., n-1
+n = 28              # state size: 0, 1, ..., n-1
 # number of subpopulations
 ℜ = cc.R
 group_size = cc.group_size
