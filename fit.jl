@@ -16,10 +16,10 @@ using CSV, Tables, DataFrames
 old style randomized approach
 """
 function generate_random_Ω(N, n, ℜ; kwargs...)
-    G = blockdiag([sparse(_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.Γₕ) for _Ψ in vec__Ψ]...)
+    G = blockdiag([sparse(_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.Γₕ) for _Ψ in vec_Ψ]...)
     D, _ = eigs(G)
     D = real(D)
-    _c = vcat([_Ψ.Q * _Ψ.λ for _Ψ in vec__Ψ]...)
+    _c = vcat([_Ψ.Q * _Ψ.λ for _Ψ in vec_Ψ]...)
     if cc.style_correlation == :uppertriangular
         ∇₀ = Matrix(G)
         ∇ₜ = UpperTriangular(cc.style_correlation_seed(N, N))
@@ -62,75 +62,70 @@ fitting data to a desired distribution
 τₛ - wanted treatment that achieves ρₛ
 """
 function generate_fitting_Ω(N, n, ℜ;
-    ρₛ=rand(n),
-    τₛ=rand(n),
-    Σ=nothing,
-    bool_type1=true
+    ρₛ=rand(N),
+    τₛ=rand(N),
+    Σ₁=nothing,
+    Σ₂=nothing,
+    style_mixin_monotonicity=3
 )
-    @info "" bool_type1 ρₛ τₛ
-    G = blockdiag([sparse(_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.Γₕ) for _Ψ in vec_Ψ]...)
-    D, _ = eigs(G)
-    D = real(D)
+    @info "" style_mixin_monotonicity ρₛ τₛ
     # shifting parameter
-    ϵ = bool_type1 ? 1e-1 : 1e-2
-    _Ψ = vec_Ψ[1]
-
-
+    ϵ = 5e-2
+    G = blockdiag([sparse(_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.Γₕ) for _Ψ in vec_Ψ]...)
     expt(τ) = 1 .- exp.(-τ .^ 2) .+ ϵ
     T = diagm(expt(τₛ))
     invT = inv(T)
 
     md = Model(optimizer_with_attributes(
-        () -> COPT.ConeOptimizer(),
+        () -> COPT.Optimizer(),
     ))
 
     # ι must exceed maximum ρₛ
-    ι = max(cc.ι, ρₛ...)
-    M₁ = -_Ψ.Γ + I + diagm(ρₛ) * _Ψ.Γₕ
-    M₂ = -_Ψ.Γ + I + cc.ι .* _Ψ.Γₕ
-    b₁ = ρₛ .* _Ψ.λ
-    θ = _Ψ.Q * _Ψ.λ
-
-    @variable(md, yv[1:n] .>= 0)
-    @variable(md, _bv[1:n] .>= 0)
-    @variable(md, _Bv[1:n, 1:n] .>= 0)
-    set_upper_bound.(_bv, 1e4)
-    @constraint(md, _Bv[1:n, 1:n] - diagm(_bv) .== 0)
-    if bool_type1
-        # quad H linear-quad g
-        @constraint(md, (_Bv * invT * Σ * ones(n)) .== yv)
-    else
-        # linear H quad g
-        @constraint(md, (_Bv * Σ * T * ones(n) + _Bv * invT * θ) .== yv)
-        @constraint(md, _Bv .>= 0)
+    M₁, M₂, b₁, θ, ι = [], [], [], [], []
+    for (id, _Ψ) in enumerate(vec_Ψ)
+        _ρ = ρₛ[(id-1)*n+1:id*n]
+        push!(ι, max(cc.ι, _ρ...))
+        push!(M₁, -_Ψ.Γ + I + diagm(_ρ) * _Ψ.Γₕ)
+        push!(M₂, _Ψ.Γ + I + cc.ι .* _Ψ.Γₕ)
+        push!(b₁, _ρ .* _Ψ.λ)
+        push!(θ, _Ψ.Q * _Ψ.λ)
     end
-    @constraint(md, M₁ * yv .== b₁)
-    @constraint(md, M₂ * yv .<= ι .* _Ψ.λ)
-    @objective(md, Max, tr(_Bv))
 
+    @variable(md, yv[1:N] .>= 0)
+    @variable(md, _bv[1:N] .>= 0)
+    @variable(md, _Bv[1:N, 1:N] .>= 0)
+    set_upper_bound.(_bv, 1e4)
+    @constraint(md, _Bv[1:N, 1:N] - diagm(_bv) .== 0)
+    if style_mixin_monotonicity != 2
+        # decreasing
+        @error("not implemented")
+    else
+        style_mixin_monotonicity == 2
+        # U-shaped
+        @constraint(md, (_Bv * Σ₁ * T * ones(N) + _Bv * invT * Σ₂ * vcat(θ...)) .== yv)
+    end
+    for (id, _Ψ) in enumerate(vec_Ψ)
+        # @constraint(md, M₁[id] * yv[(id-1)*n+1:id*n] .== b₁[id])
+        @constraint(md, M₂[id] * yv[(id-1)*n+1:id*n] .<= ι[id] .* _Ψ.λ)
+        # @constraint(md, M₂[id] * yv[(id-1)*n+1:id*n] .<= _Ψ.λ)
+    end
+    @objective(md, Max, tr(_Bv))
     optimize!(md)
 
+    if termination_status(md) != MOI.OPTIMAL
+        @warn "Optimizer did not converge"
+        @info "" termination_status(md)
+        return md
+    end
     y = value.(yv)
-    x = 1 ./ (1 .- _Ψ.γ) .* (_Ψ.λ - _Ψ.Γₕ * y)
+    x = vcat([1 ./ (1 .- _Ψ.γ) .* (_Ψ.λ - _Ψ.Γₕ * y[(id-1)*n+1:id*n])
+              for (id, _Ψ) in enumerate(vec_Ψ)]...)
     _B = value.(_Bv)
     _A = inv(_B)
 
-    # not stable
-    # H₁(τ) = diagm(expt(τ)) * _A * inv(Σ) * _A' * diagm(expt(τ))
-    # g₁(τ) = diagm(expt(τ)) * _A * ones(n) + H₁(τ) * θ
-    # y₁(τ) = H₁(τ) \ g₁(τ)
-    H₁(τ) = _A * diagm(expt(τ)) .^ 2 * _A'
-    g₁(τ) = _A * diagm(expt(τ)) * Σ * ones(n)
-    y₁(τ) = H₁(τ) \ g₁(τ)
-
-    H₂(τ) = _A * diagm(expt(τ)) * _A'
-    g₂(τ) = _A * diagm(expt(τ)) * Σ * diagm(expt(τ)) * ones(n) + _A * θ
-    y₂(τ) = H₂(τ) \ g₂(τ)
-
-
-    Hₕ = bool_type1 ? H₁ : H₂
-    gₕ = bool_type1 ? g₁ : g₂
-    yₕ = bool_type1 ? y₁ : y₂
+    Hₕ(τ) = _A * diagm(expt(τ)) * _A'
+    gₕ(τ) = _A * diagm(expt(τ)) * Σ₁ * diagm(expt(τ)) * ones(N) + _A * Σ₂ * vcat(θ...)
+    yₕ(τ) = Hₕ(τ) \ gₕ(τ)
 
     @info "" maximum(abs.(y ./ x - ρₛ))
     @info "" maximum(abs.(_A * _B - I)) < 1e-5
@@ -138,19 +133,28 @@ function generate_fitting_Ω(N, n, ℜ;
     @info "" (yₕ(τₛ .* 1000)) |> sum
 
     ω∇ω(y, τ) = begin
-        _H = Hₕ(τ) + _Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.Γₕ
-        _g = -gₕ(τ) - _Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.λ
+        _H = Hₕ(τ) + G
+        # _g = -gₕ(τ) - _Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.λ
+        _g = -gₕ(τ) - vcat([_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.λ for _Ψ in vec_Ψ]...)
         _w = 1 / 2 * y' * _H * y + y' * _g
         ∇ = _H * y + _g
         _w, ∇
     end
-    return ω∇ω, G, ι, y, x, gₕ, Hₕ, yₕ, _A, _B
+    return ω∇ω, G, ι, y, x, gₕ, Hₕ, yₕ, _A, _B, md
 end
 
-function tuning(n; type_monotone=true, ρₛ=nothing, τₛ=nothing)
+function tuning(n, Σ₁, Σ₂; style_mixin_monotonicity=3, ρₛ=nothing, τₛ=nothing)
 
-    Σ = rand(n, n)
-    Σ = Σ' * Σ + 1e-2 * I
+    if cc.style_correlation == :uppertriangular
+        Σ₁ = UpperTriangular(Σ₁)
+        Σ₂ = UpperTriangular(Σ₂)
+    else
+        throw(ErrorException("not implemented"))
+    end
+    if !cc.style_correlation_subp
+        Σ₁ = blockdiag([sparse(Σ₁[(id-1)*n+1:id*n, (id-1)*n+1:id*n]) for id in 1:ℜ]...)
+        Σ₂ = blockdiag([sparse(Σ₂[(id-1)*n+1:id*n, (id-1)*n+1:id*n]) for id in 1:ℜ]...)
+    end
     if cc.style_mixin_parameterization == :random
         _args = generate_random_Ω(N, n, ℜ)
     elseif cc.style_mixin_parameterization == :fitting
@@ -158,8 +162,9 @@ function tuning(n; type_monotone=true, ρₛ=nothing, τₛ=nothing)
             N, n, ℜ;
             ρₛ=ρₛ,
             τₛ=τₛ,
-            Σ=Σ,
-            bool_type1=type_monotone
+            Σ₁=Σ₁,
+            Σ₂=Σ₂,
+            style_mixin_monotonicity=style_mixin_monotonicity
         )
     else
     end

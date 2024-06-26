@@ -38,7 +38,7 @@ if bool_run_baseline
             n;
             ρₛ=ρₛ,
             τₛ=vec_z[1].τ,
-            type_monotone=true
+            style_mixin_monotonicity=true
         )
         Fp(vec_z) = F!(
             vec_z, vec_Ψ;

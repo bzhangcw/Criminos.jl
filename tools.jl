@@ -20,7 +20,7 @@ function plot_convergence(ε, s)
         push!(pls, pl)
     end
     pl = plot(
-        size=(700 * (s), 900),
+        size=(700 * (s + 1), 900),
     )
     push!(pls, pl)
     fig = plot(pls...,
@@ -28,13 +28,13 @@ function plot_convergence(ε, s)
         labelfontsize=20,
         xtickfont=font(25),
         ytickfont=font(25),
-        # xscale=:log2,
         legendfontsize=25,
         titlefontsize=25,
         extra_plot_kwargs=cc.bool_use_html ? KW(
             :include_mathjax => "cdn",
         ) : Dict(),
-        layout=@layout([° °; _ °])
+        # xscale=:log2,
+        # layout=@layout([° °; _ °])
     )
     savefig(fig, "$(cc.result_dir)/convergence.$format")
     @info "write to" "$(cc.result_dir)/convergence.$format"

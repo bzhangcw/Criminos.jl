@@ -57,28 +57,11 @@ function mixed_in_gnep_best!(
         _x₋ = z.x₋
         _y = y[(id-1)*_n+1:id*_n]
         _Ψ = vector_Ψ[id]
-
-        # set upper bound
-        set_upper_bound.(_y, _x .* ι)
-        # if default_gnep_mixin_option.is_kl
-        # if use smooth box constraint
-        # _ycon = @constraint(
-        #     model,
-        #     1e-1 * _y' * log.(_y .+ 1e-3) + (_x - _y)' * log.(_x - _y) <= _x' * log.(_x / 2) + 0.5 * sum(_x)
-        # )
-        # _ycon = @constraint(
-        #     model,
-        #     # log.(_x - _y) .>= log.(_x / 10) * 0.5
-        #     _y .<= _x .* cc.ι
-        # )
-        # _tol = round.(0.1 .* (_x₋ .+ 1e-4) .* z.y; digits=2)
-        # _ycon = @constraint(
-        #     model,
-        #     (_x₋ .+ 1e-4) .* _y - round.((_x₋ .+ 1e-4) .* (2 * _Ψ.Γ - _Ψ.Γₕ) * z.y - _Ψ.Γ * (z.y .^ 2); digits=2) .<= _tol
-        # )
-        # push!(ycons, _ycon)
-        # else
-        # end
+        # --------------------------------------------------
+        # set upper bound of the boxes
+        # --------------------------------------------------
+        set_upper_bound.(_y, _x .* ι[id])
+        # set_upper_bound.(_y, _x)
         _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y) / baropt.μ
     end
     # repeat the blocks

@@ -14,6 +14,7 @@ result_dir = isnothing(alias) ? "result-$folder_name" : "result-$(folder_name[1:
 mkpath(result_dir)
 
 println(repeat("-", 80))
+println("config_dir: $f_config")
 println("result_dir: $result_dir")
 println(repeat("-", 80))
 variables_from_yaml = YAML.load_file(f_config)
@@ -24,6 +25,7 @@ style_correlation_seed = eval(variables_from_yaml["style_correlation_seed"] |> S
 style_correlation_psd = variables_from_yaml["style_correlation_psd"]
 style_correlation_subp = variables_from_yaml["style_correlation_subp"]
 style_mixin = getfield(Criminos, Symbol(variables_from_yaml["style_mixin"]))
+style_mixin_monotonicity = variables_from_yaml["style_mixin_monotonicity"]
 style_mixin_parameterization = Symbol(variables_from_yaml["style_mixin_parameterization"])
 style_mixin_name = style_mixin |> nameof
 style_decision = getfield(Criminos, Symbol(variables_from_yaml["style_decision"]))
@@ -40,6 +42,7 @@ seed_number = variables_from_yaml["seed_number"]
 R = variables_from_yaml["R"]
 group_size = variables_from_yaml["group_size"]
 group_new_ratio = variables_from_yaml["group_new_ratio"]
+group_montonicity = variables_from_yaml["group_montonicity"]
 ι = (1 - √exp(1) / 10)
 end
 
@@ -83,7 +86,7 @@ ratio_group = 1 # ratio of trajectories to be plotted
 # -----------------------------------------------------------------------------
 Random.seed!(cc.seed_number)
 K = 2000           # number of maximum iterations
-n = 28              # state size: 0, 1, ..., n-1
+n = 16              # state size: 0, 1, ..., n-1
 # number of subpopulations
 ℜ = cc.R
 group_size = cc.group_size

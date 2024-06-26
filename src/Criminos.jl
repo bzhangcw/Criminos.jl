@@ -171,5 +171,5 @@ end
 export MarkovState
 export BidiagSys
 export F!
-export optalg
+export optalg, ν, σ
 end # module Criminos

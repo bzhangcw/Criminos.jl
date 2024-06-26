@@ -39,12 +39,15 @@ function decision_identity!(
 end
 
 
-
+ν(x) = x > 0 ? exp(-1 / (x)) : 0;
+σ(x; ℓ=0, ϵ=0.1) = begin
+    ν((x - ℓ + ϵ / 2) / ϵ) / (ν((x - ℓ + ϵ / 2) / ϵ) + ν((ℓ + ϵ / 2 - x) / ϵ))
+end
 function decision_matching_lh!(
     vector_ms::Vector{MarkovState{R,Tx}},
     vec_Ψ::Vector{BidiagSys{Tx,Tm}};
     args=nothing,
-    ℓ=0.05,
+    ℓ=0.1,
     kwargs...
 ) where {R,Tx,Tm}
     cₜ, α₁, α₂, _... = args
@@ -66,22 +69,22 @@ function decision_matching_lh!(
         _hl = sort(_hy; rev=true)
 
         # compute the threshold risk
-        θ = 0
+        _I = nothing
         for l in _hl
-            _I = (_hy .> l)
+            # _I = (_hy .> l)
+            z.θ = l
+            _I = σ.(_hy; ℓ=l, ϵ=2.0)
             _fpr = fp(_I, z)
             if _fpr > ℓ || l < 1e-2
                 break
             end
             z.fpr = _fpr
-            θ = l
         end
 
-        indices = _hy .>= θ
-
-        z.τ[.~indices] .= α₁
-        z.τ[indices] .= α₂
-        z.θ = θ
+        # indices = _hy .>= θ
+        # z.τ[.~indices] .= α₁
+        # z.τ[indices] .= α₂
+        z.τ = α₁ * (1 .- _I) .+ α₂ * _I
     end
 end
 

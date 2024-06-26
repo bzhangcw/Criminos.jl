@@ -19,11 +19,35 @@ include("./fit.jl")
 include("./init.jl")
 
 K = 10000
+ρₛ = min.(vcat([unimodal(n) for _ in 1:ℜ]...), cc.ι * 0.9)
+for _z in vec_z
+    _z.τ .= 0.3
+end
+τₛ = vcat([_z.τ for _z in vec_z]...)
+@time begin
+    # baseline
+    _args = tuning(
+        n, Σ₁, Σ₂;
+        ρₛ=ρₛ,
+        τₛ=τₛ,
+        style_mixin_monotonicity=cc.style_mixin_monotonicity
+    )
+    Fp(vec_z) = F!(
+        vec_z, vec_Ψ;
+        fₜ=cc.style_decision, targs=(cₜ, cc.α₁, cc.α₂),
+        fₘ=cc.style_mixin, margs=_args,
+    )
+end
+
+K = 10000
 series_color = palette(:default)
 series_size = length(series_color)
 
 if cc.bool_conv
     ################################################################################
+    for _z in vec_z
+        _z.τ .= 0.5
+    end
     kₑ, ε, traj, bool_opt = Criminos.simulate(
         vec_z, vec_Ψ, Fp; K=K,
         metrics=metrics

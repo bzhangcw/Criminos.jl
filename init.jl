@@ -31,7 +31,7 @@ if cc.bool_init
     τ[1:xₙ] .= cc.α₁
     τ[xₙ:end] .= cc.α₂
     vec_z = [
-        MarkovState(0, n; τ=τ, β=group_size[idx]) for idx in 1:ℜ
+        MarkovState(0, n; τ=τ, β=1.0) for idx in 1:ℜ
     ]
 
     # ----------------------------------------------------------------------------
@@ -53,9 +53,9 @@ if cc.bool_init
     # generate data for ℜ population
     N = n * ℜ
 
-    ################################################################################
+    #----------------------------------------------------------------------------
     # get the fixed-point plots 
-    ################################################################################
+    #----------------------------------------------------------------------------
     metrics = Dict(
         Criminos.Lₓ => L"\|x - x^*\|",
         Criminos.Lᵨ => L"\|y - y^*\|",
@@ -65,4 +65,18 @@ if cc.bool_init
         Criminos.θ => L"$\theta$",
         Criminos.fpr => L"\textrm{FPR}",
     )
+
+    #----------------------------------------------------------------------------
+    Σ₁ = rand(N, N)
+    Σ₁ = Σ₁' * Σ₁ + 1e-2 * I
+    Σ₂ = rand(N, N)
+    Σ₂ = Σ₂' * Σ₂ + 1e-2 * I
+    for idx in 1:ℜ
+        if cc.group_montonicity[idx] == 0
+            Σ₁[(idx-1)*n+1:idx*n, (idx-1)*n+1:idx*n] .= 0
+        elseif cc.group_montonicity[idx] == 1
+            Σ₂[(idx-1)*n+1:idx*n, (idx-1)*n+1:idx*n] .= 0
+        end
+    end
 end
+
