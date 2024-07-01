@@ -105,8 +105,10 @@ function generate_fitting_Ω(N, n, ℜ;
         @constraint(md, (_Bv * Σ₁ * T * ones(N) + _Bv * invT * Σ₂ * vcat(θ...)) .== yv)
     end
     for (id, _Ψ) in enumerate(vec_Ψ)
-        # @constraint(md, M₁[id] * yv[(id-1)*n+1:id*n] .== b₁[id])
-        @constraint(md, M₂[id] * yv[(id-1)*n+1:id*n] .<= ι[id] .* _Ψ.λ)
+        @constraint(md, M₁[id] * yv[(id-1)*n+1:id*n] .== b₁[id])
+    end
+    for (id, _Ψ) in enumerate(vec_Ψ)
+        # @constraint(md, M₂[id] * yv[(id-1)*n+1:id*n] .<= ι[id] .* _Ψ.λ)
         # @constraint(md, M₂[id] * yv[(id-1)*n+1:id*n] .<= _Ψ.λ)
     end
     @objective(md, Max, tr(_Bv))

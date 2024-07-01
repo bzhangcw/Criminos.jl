@@ -86,7 +86,7 @@ ratio_group = 1 # ratio of trajectories to be plotted
 # -----------------------------------------------------------------------------
 Random.seed!(cc.seed_number)
 K = 2000           # number of maximum iterations
-n = 16              # state size: 0, 1, ..., n-1
+n = 18              # state size: 0, 1, ..., n-1
 # number of subpopulations
 ℜ = cc.R
 group_size = cc.group_size

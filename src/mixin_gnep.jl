@@ -60,8 +60,8 @@ function mixed_in_gnep_best!(
         # --------------------------------------------------
         # set upper bound of the boxes
         # --------------------------------------------------
-        set_upper_bound.(_y, _x .* ι[id])
-        # set_upper_bound.(_y, _x)
+        # set_upper_bound.(_y, _x .* ι[id])
+        set_upper_bound.(_y, _x)
         _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y) / baropt.μ
     end
     # repeat the blocks

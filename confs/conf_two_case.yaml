@@ -32,8 +32,8 @@ style_mixin: "mixed_in_gnep_best!"
 style_mixin_parameterization: "fitting"
 style_mixin_monotonicity: 2
 # style_decision: "decision_null!"
-style_decision: "decision_identity!"
-# style_decision: "decision_matching_lh!"
+# style_decision: "decision_identity!"
+style_decision: "decision_matching_lh!"
 # α₁, α₂ are the parameters for the decision function
 #   if using the low-high 2-group rule to set τ
 α₁: 0.2
@@ -58,4 +58,4 @@ R: 2
 group_size: [1, 6]
 group_new_ratio: [1, 4]
 # 0-decreasing, 1-increasing, 2-ushape
-group_montonicity: [1, 0]
+group_montonicity: [0, 0]

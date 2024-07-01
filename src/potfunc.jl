@@ -31,3 +31,9 @@ function fpr(z, z₊; p=1)
     return z.fpr
 end
 
+
+function ρ(z, z₊; p=1)
+    return sum(z.y) / sum(z.x)
+end
+
+

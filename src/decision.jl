@@ -32,9 +32,7 @@ function decision_identity!(
 ) where {R,Tx,Tm}
     # do nothing
     for (id, z) in enumerate(vector_ms)
-        _I = (z.τ .== maximum(z.τ))
-        _fpr = fp(_I, z)
-        z.fpr = _fpr
+        z.fpr = 0.0
     end
 end
 
@@ -47,7 +45,7 @@ function decision_matching_lh!(
     vector_ms::Vector{MarkovState{R,Tx}},
     vec_Ψ::Vector{BidiagSys{Tx,Tm}};
     args=nothing,
-    ℓ=0.1,
+    ℓ=0.15,
     kwargs...
 ) where {R,Tx,Tm}
     cₜ, α₁, α₂, _... = args
@@ -73,12 +71,12 @@ function decision_matching_lh!(
         for l in _hl
             # _I = (_hy .> l)
             z.θ = l
-            _I = σ.(_hy; ℓ=l, ϵ=2.0)
+            _I = σ.(_hy; ℓ=l, ϵ=3.0)
             _fpr = fp(_I, z)
+            z.fpr = _fpr
             if _fpr > ℓ || l < 1e-2
                 break
             end
-            z.fpr = _fpr
         end
 
         # indices = _hy .>= θ
