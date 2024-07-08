@@ -33,11 +33,12 @@ style_mixin_parameterization: "fitting"
 style_mixin_monotonicity: 2
 # style_decision: "decision_null!"
 # style_decision: "decision_identity!"
-style_decision: "decision_matching_lh!"
-# α₁, α₂ are the parameters for the decision function
+# style_decision: "decision_matching_lh!"
+style_decision: "decision_matching_lh_opt!"
+# τₗ, τₕ are the parameters for the decision function
 #   if using the low-high 2-group rule to set τ
-α₁: 0.2
-α₂: 0.6
+τₗ: 0.2
+τₕ: 0.6
 
 # ---------------------------------------
 # bool options, true or false

@@ -42,7 +42,7 @@ if bool_run_baseline
         )
         Fp(vec_z) = F!(
             vec_z, vec_Ψ;
-            fₜ=cc.style_decision, targs=(cₜ, cc.α₁, cc.α₂),
+            fₜ=cc.style_decision, targs=(cₜ, cc.τₗ, cc.τₕ),
             fₘ=cc.style_mixin, margs=_args,
         )
         kₑ, ε, traj, bool_opt = Criminos.simulate(

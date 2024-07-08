@@ -13,7 +13,7 @@ function plot_convergence(ε, s)
                 pl, 1:kₑ,
                 vv[1:kₑ],
                 label=fname,
-                title="group-$id: " * L"$\alpha_1: %$(cc.α₁), \alpha_2: %$(cc.α₂)$",
+                title="group-$id: " * L"$\alpha_1: %$(cc.τₗ), \alpha_2: %$(cc.τₕ)$",
                 legend_column=length(metrics)
             )
         end

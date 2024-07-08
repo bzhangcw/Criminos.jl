@@ -1,6 +1,6 @@
 module Criminos
 
-using JuMP, Gurobi, Ipopt, HiGHS
+using JuMP, Gurobi, Ipopt, HiGHS, COPT
 greet() = print("Hello World!")
 
 EPS_FP = 1e-5
@@ -29,6 +29,9 @@ end
 
 mutable struct DecisionOption
     τ::Union{Nothing,Any}
+    ℓ::Union{Nothing,Any}
+    h::Union{Nothing,Any}
+    I::Union{Nothing,Any}
     τcon::Union{Nothing,Any}
     is_setup::Bool
     model::Union{Nothing,Model}
@@ -91,14 +94,17 @@ function __init__()
     default_decision_option = DecisionOption(
         nothing,
         nothing,
+        nothing,
+        nothing,
+        nothing,
         false,
         # Model(optimizer_with_attributes(
         #     () -> Ipopt.Optimizer(),
         #     "print_level" => 0
         # ))
         Model(optimizer_with_attributes(
-            () -> HiGHS.Optimizer(),
-            "log_to_console" => false
+            () -> COPT.Optimizer(),
+            "LogToConsole" => false
         ))
     )
 end

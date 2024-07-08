@@ -31,8 +31,10 @@ function decision_identity!(
     kwargs...
 ) where {R,Tx,Tm}
     # do nothing
+    cₜ, τₗ, τₕ, _... = args
     for (id, z) in enumerate(vector_ms)
-        z.fpr = 0.0
+        _I = (z.τ .- τₗ) ./ (τₕ .- τₗ)
+        z.fpr = fp(_I, z)
     end
 end
 
@@ -48,7 +50,7 @@ function decision_matching_lh!(
     ℓ=0.15,
     kwargs...
 ) where {R,Tx,Tm}
-    cₜ, α₁, α₂, _... = args
+    cₜ, τₗ, τₕ, _... = args
     # at this model, we use logistic regression to 
     # match X^{-1}y to N, the number of records
     for (id, z) in enumerate(vector_ms)
@@ -80,42 +82,61 @@ function decision_matching_lh!(
         end
 
         # indices = _hy .>= θ
-        # z.τ[.~indices] .= α₁
-        # z.τ[indices] .= α₂
-        z.τ = α₁ * (1 .- _I) .+ α₂ * _I
+        # z.τ[.~indices] .= τₗ
+        # z.τ[indices] .= τₕ
+        z.τ = τₗ * (1 .- _I) .+ τₕ * _I
     end
 end
 
-
-# matching rule
-function decision_matching!(
+function decision_matching_lh_opt!(
     vector_ms::Vector{MarkovState{R,Tx}},
     vec_Ψ::Vector{BidiagSys{Tx,Tm}};
     args=nothing,
+    θ=0.02,
+    δ=0.1,
     kwargs...
 ) where {R,Tx,Tm}
-    _c, _... = args
+    cₜ, τₗ, τₕ, _... = args
     _n = vector_ms[1].n
     _N = _n * length(vector_ms)
     model = default_decision_option.model
     if default_decision_option.is_setup == false
         @variable(model, τ[1:_N] .>= 0)
-        default_decision_option.τ = τ
+        @variable(model, I[1:_N] .>= 0)
+        @variable(model, h[1:_N] .>= 0)
+        @variable(model, ℓ[1:length(vector_ms)] .>= 0)
+        set_upper_bound.(I, 1.0)
         default_decision_option.is_setup = true
+        default_decision_option.τ = τ
+        default_decision_option.I = I
+        default_decision_option.h = h
+        default_decision_option.τcon = []
+        @constraint(model, τ .- τₗ .* (1 .- I) - I .* τₕ .== 0)
+        for (id, z) in enumerate(vector_ms)
+            _I = I[(id-1)*_n+1:id*_n]
+            _h = h[(id-1)*_n+1:id*_n]
+            @constraint(model, _I .- (_h .- ℓ[id]) .>= 0)
+            @constraint(model, (1 .- _I) .- (-_h .+ ℓ[id]) .>= 0)
+        end
     end
-    τ = default_decision_option.τ
     _φ = 0.0
-
+    τ = default_decision_option.τ
+    I = default_decision_option.I
+    h = default_decision_option.h
+    for c in default_decision_option.τcon
+        delete(model, c)
+    end
+    default_decision_option.τcon = []
     for (id, z) in enumerate(vector_ms)
-        _x = z.x
+        _x = z.x₋
         _y = z.y
         _τ = τ[(id-1)*_n+1:id*_n]
-
-        _p = _y ./ (_x .+ 1e-3)
-        # if use smooth box constraint
-        set_upper_bound.(_τ, _p .+ 0.02)
-        set_lower_bound.(_τ, max.(0, _p .- 0.02))
-        _φ += _τ' * _c # + sum(_τ .^ 2) * 10
+        _I = I[(id-1)*_n+1:id*_n]
+        _h = h[(id-1)*_n+1:id*_n]
+        set_upper_bound.(_h, _y ./ _x .+ θ)
+        set_lower_bound.(_h, _y ./ _x .- θ)
+        push!(default_decision_option.τcon, @constraint(model, δ * sum(_x - _y) - _I' * (_x - _y) .>= 0))
+        _φ -= _τ'cₜ
     end
     @objective(model, Min, _φ)
     optimize!(model)
@@ -123,8 +144,13 @@ function decision_matching!(
         @warn "Optimizer did not converge"
         @info "" termination_status(model)
     end
-    τv = value.(τ)
     for (id, z) in enumerate(vector_ms)
-        z.τ = τv[(id-1)*_n+1:id*_n]
+        _τ = τ[(id-1)*_n+1:id*_n]
+        _I = I[(id-1)*_n+1:id*_n]
+        z.τ = value.(_τ)
+        z.I = value.(_I)
+        z.fpr = fp(z.I, z)
+        z.θ = value(model[:ℓ][id])
     end
+
 end

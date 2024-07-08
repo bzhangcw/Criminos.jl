@@ -38,6 +38,7 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
     y::Tx               # recivists
     y₋::Tx              # previous recivists
     τ::Tx               # treatment probability
+    I::Tx               # high-low risk group assignment
     f::Real             # objective value of the mixed-in function
     β::Real             # group size
     θ::Real             # cutoff risk value
@@ -46,7 +47,7 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
     MarkovState(
         k, n::Int;
         z=[Random.rand(Float64, n); Random.rand(Float64, n)],
-        τ=Random.rand(Float64, n),
+        τ=Random.rand(Float64, n), I=Random.rand(Float64, n),
         β::Real=1.0
     ) = (
         this = new{Float64,Vector{Float64}}();
@@ -60,6 +61,7 @@ Base.@kwdef mutable struct MarkovState{R,Tx}
         this.β = β;
         this.z = [this.x; this.ρ];
         this.τ = copy(τ);
+        this.I = I;
         this.f = 1e4;
         this.θ = 0.0;
         this.fpr = 0.0;
@@ -77,6 +79,7 @@ Base.show(io::IO, ::MIME"text/plain", z::MarkovState{R,Tx}) where {R,Tx} =
            y: $(round.(z.y;digits=4))
            ∑: $(round.(z.y|>sum;digits=4))/$(round.(z.x|>sum;digits=4))
            τ: $(round.(z.τ;digits=4))
+           I: $(round.(z.I;digits=4))
         """
     )
 

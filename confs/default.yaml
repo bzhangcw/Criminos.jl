@@ -31,10 +31,10 @@ style_mixin: "mixed_in_gnep_best!"
 # style_decision: "decision_null!"
 style_decision: "decision_identity!"
 # style_decision: "decision_matching_lh!"
-# α₁, α₂ are the parameters for the decision function
+# τₗ, τₕ are the parameters for the decision function
 #   if using the low-high 2-group rule to set τ
-α₁: 0.1
-α₂: 0.5
+τₗ: 0.1
+τₕ: 0.5
 
 # ---------------------------------------
 # bool options, true or false

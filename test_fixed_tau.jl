@@ -39,24 +39,24 @@ if cc.bool_compute
     totalsize = length(ℓ) * length(h)
     model = Criminos.default_xinit_option.model
     p = Progress(totalsize; showspeed=true)
-    for α₁ in ℓ
-        for α₂ in h
+    for τₗ in ℓ
+        for τₕ in h
             τ = ones(n) / 2
             xₙ = Int(n // 2)
-            τ[1:xₙ] .= α₁
-            τ[xₙ:end] .= α₂
+            τ[1:xₙ] .= τₗ
+            τ[xₙ:end] .= τₕ
             _z = MarkovState(0, zᵦ.z, τ)
             # _z = MarkovState(0, n, τ)
             kₑ, ε, traj, bool_opt = Criminos.simulate(_z, Ψ, Fp; K=K, metrics=metrics)
             traj = traj[1]
             if !bool_opt
-                @warn "not converged" α₁ α₂
+                @warn "not converged" τₗ τₕ
                 # continue
             end
             # only save converged ones
             pps = sum_population.(traj)
             key = tuple(
-                α₁, α₂,
+                τₗ, τₕ,
             )
             println(key, "\t", length(traj))
             if key in keys(runs)
@@ -66,11 +66,11 @@ if cc.bool_compute
                 runs[key] = [traj]
                 pops[key] = [pps]
             end
-            # group same α₁
-            if α₁ in keys(runs_same_α)
-                push!(runs_same_α[α₁], [pps[end]..., α₂])
+            # group same τₗ
+            if τₗ in keys(runs_same_α)
+                push!(runs_same_α[τₗ], [pps[end]..., τₕ])
             else
-                runs_same_α[α₁] = [[pps[end]..., α₂]]
+                runs_same_α[τₗ] = [[pps[end]..., τₕ]]
             end
 
             ProgressMeter.next!(p)
@@ -88,7 +88,7 @@ if bool_plot_trajectory && bool_use_html
     )
     for (neidx, (key, trajs)) in enumerate(runs_same_α)
         data = hcat(trajs...)
-        x, y, α₂ = data[1, :], data[2, :], data[3, :]
+        x, y, τₕ = data[1, :], data[2, :], data[3, :]
         kk = key
         indx = indexin(kk, ℓ)[]
         color = indx == 0 ? :black : series_color[indx%series_size+1]
@@ -104,7 +104,7 @@ if bool_plot_trajectory && bool_use_html
             arrow=true,
             arrowhead=4,
             linewidth=4,
-            hovers=string.(α₂),
+            hovers=string.(τₕ),
         )
     end
 
