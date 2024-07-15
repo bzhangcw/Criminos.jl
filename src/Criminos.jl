@@ -1,6 +1,7 @@
 module Criminos
 
 using JuMP, Gurobi, Ipopt, HiGHS, COPT
+using ProgressMeter
 greet() = print("Hello World!")
 
 EPS_FP = 1e-5
@@ -147,6 +148,7 @@ function simulate(
     r = length(Vz)
     kₑ = 0
     eps = zeros(r)
+    p = Progress(K)
     for k::Int in 1:K
         push!(traj, Vz)
         _Vz = copy.(Vz)
@@ -163,7 +165,9 @@ function simulate(
         end
         Vz = _Vz
         k += 1
+        next!(p)
     end
+    finish!(p)
     for (id, z) in enumerate(Vz)
         for (func, fname) in metrics
             z₊ = traj[end][id]

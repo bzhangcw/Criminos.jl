@@ -43,6 +43,34 @@ end
 σ(x; ℓ=0, ϵ=0.1) = begin
     ν((x - ℓ + ϵ / 2) / ϵ) / (ν((x - ℓ + ϵ / 2) / ϵ) + ν((ℓ + ϵ / 2 - x) / ϵ))
 end
+
+
+"""
+    decision_matching_lh!(
+        vector_ms::Vector{MarkovState{R,Tx}},
+        vec_Ψ::Vector{BidiagSys{Tx,Tm}};
+        args=nothing,
+        ℓ=0.15,
+        kwargs...
+    ) where {R,Tx,Tm}
+
+The `decision_matching_lh!` function performs decision matching for a given set of Markov states and a vector of BidiagSys objects. 
+    It updates the threshold values (`z.θ`) and the risk values (`z.τ`) for each Markov state 
+    based on the logistic regression model.
+
+## Arguments
+- `vector_ms`: A vector of MarkovState objects representing the Markov states.
+- `vec_Ψ`: A vector of BidiagSys objects representing the BidiagSys values.
+- `args`: Additional arguments for the function (optional).
+- `ℓ`: The threshold risk value (default: 0.15).
+- `kwargs`: Additional keyword arguments for the function.
+
+## Type Parameters
+- `R`: The type of the Markov state.
+- `Tx`: The type of the BidiagSys object.
+- `Tm`: The type of the BidiagSys value.
+
+"""
 function decision_matching_lh!(
     vector_ms::Vector{MarkovState{R,Tx}},
     vec_Ψ::Vector{BidiagSys{Tx,Tm}};
@@ -88,12 +116,35 @@ function decision_matching_lh!(
     end
 end
 
+"""
+    decision_matching_lh_opt!(vector_ms, vec_Ψ; args=nothing, θ=0.02, δ=0.1, kwargs...)
+
+This function performs decision matching optimization. 
+@note:
+ - this regard the decision-making process as another player in the GNEP
+ - compared to, e.g., `decision_matching_lh!`, this function is more computationally expensive
+
+# Arguments
+- `vector_ms::Vector{MarkovState{R,Tx}}`: A vector of MarkovState objects.
+- `vec_Ψ::Vector{BidiagSys{Tx,Tm}}`: A vector of BidiagSys objects.
+- `args=nothing`: Additional arguments.
+- `θ=0.02`: A parameter.
+- `δ=0.1`: A parameter.
+- `kwargs...`: Additional keyword arguments.
+
+# Type Parameters
+- `R`: Type parameter.
+- `Tx`: Type parameter.
+- `Tm`: Type parameter.
+
+"""
 function decision_matching_lh_opt!(
     vector_ms::Vector{MarkovState{R,Tx}},
     vec_Ψ::Vector{BidiagSys{Tx,Tm}};
     args=nothing,
     θ=0.02,
     δ=0.1,
+    baropt=default_barrier_option,
     kwargs...
 ) where {R,Tx,Tm}
     cₜ, τₗ, τₕ, _... = args
@@ -136,7 +187,7 @@ function decision_matching_lh_opt!(
         set_upper_bound.(_h, _y ./ _x .+ θ)
         set_lower_bound.(_h, _y ./ _x .- θ)
         push!(default_decision_option.τcon, @constraint(model, δ * sum(_x - _y) - _I' * (_x - _y) .>= 0))
-        _φ -= _τ'cₜ
+        _φ += -_τ'cₜ + dist(_τ, z.τ) / baropt.μ
     end
     @objective(model, Min, _φ)
     optimize!(model)

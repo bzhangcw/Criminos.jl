@@ -8,8 +8,19 @@
 [docs-stable-url]: https://bzhangcw.github.io/Criminos.jl/stable
 [docs-dev-url]: https://bzhangcw.github.io/Criminos.jl/dev
 
+# Note
 
+> We only support UNIX systems, issues and PR for Windows will be ignored.
+
+To run the test, you may set the environment variables,
+
+Open a bash/zsh terminal, set result directory and configuration file:
+```bash
+# result directory
+export CRIMINOS_ALIAS=test; 
+# configuration file
+export CRIMINOS_CONF=confs/conf_two_case.yaml;
+```
 
 # Dependency
 
-We require optimization solvers to run best-response dynamics and 
