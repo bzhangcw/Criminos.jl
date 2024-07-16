@@ -159,7 +159,7 @@ function simulate(
             eps[id] = norm(Vz[id].z - z.z)
         end
         kₑ = k
-        if maximum(eps) < 1e-5
+        if maximum(eps) < 1e-6
             @info "converged in $kₑ steps"
             break
         end

@@ -8,6 +8,8 @@
 # how to generate the rention rate, γ in the paper
 style_retention: "rand"
 style_correlation: "uppertriangular"
+# style_correlation: "diagonal"
+# style_correlation: "lowertriangular"
 # function name to generate the correlation matrix rate,
 # "rand"   - for uniform distribution  U(0,1)
 # "randn"  - for normal  distribution  N(0,1)
@@ -59,4 +61,4 @@ R: 1
 group_size: [1, 6]
 group_new_ratio: [1, 4]
 # 0-decreasing, 1-increasing, 2-ushape
-group_montonicity: [0, 0]
+group_montonicity: [0, 1]
