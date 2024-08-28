@@ -1,5 +1,9 @@
 using LinearAlgebra, SparseArrays, Arpack
 
+switch_to_pdf = () -> begin
+    pgfplotsx()
+    format = "pdf"
+end
 generate_empty = (use_html) -> begin
     plot(
         extra_plot_kwargs=use_html ? Dict(
