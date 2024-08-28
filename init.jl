@@ -17,6 +17,7 @@ using CSV, Tables, DataFrames
 
 
 if cc.bool_init
+    Random.seed!(cc.seed_number)
     # ----------------------------------------------------------------------------
     # decision cost
     # ----------------------------------------------------------------------------
@@ -26,7 +27,7 @@ if cc.bool_init
     # initial state
     # ----------------------------------------------------------------------------
     τ = ones(n)
-    xₙ = Int(n // 2)
+    xₙ = Int(round(n // 2; digits=0))
     # initialize τₗ and τₕ
     τ[1:xₙ] .= cc.τₗ
     τ[xₙ:end] .= cc.τₕ

@@ -30,7 +30,7 @@ Base.@kwdef mutable struct BidiagSys{Tx,Tm}
     M::Tm             # helper matrix
     Q::Tm             # helper matrix
     Γ::Tm             # helper matrix
-    Γₕ::Tm             # helper matrix
+    Γₕ::Tm            # helper matrix
     style::Symbol     # random or known
 
     BidiagSys(n::Int; style=:rand) = (

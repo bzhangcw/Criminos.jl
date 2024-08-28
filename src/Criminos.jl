@@ -1,6 +1,6 @@
 module Criminos
 
-using JuMP, Gurobi, Ipopt, HiGHS, COPT
+using JuMP, Gurobi, Ipopt, COPT
 using ProgressMeter
 greet() = print("Hello World!")
 
@@ -39,7 +39,7 @@ mutable struct DecisionOption
 end
 
 const GRB_ENV = Ref{Gurobi.Env}()
-default_barrier_option = BarrierOption(0.01)
+default_barrier_option = BarrierOption(1e-2)
 default_gnep_mixin_option = Ref{GNEPMixinOption}()
 default_xinit_option = Ref{XInitHelper}()
 default_decision_option = Ref{DecisionOption}()
@@ -64,8 +64,8 @@ function __init__()
             () -> Ipopt.Optimizer(),
             "print_level" => 0
         )) : Model(optimizer_with_attributes(
-            () -> HiGHS.Optimizer(),
-            "log_to_console" => false
+            () -> COPT.Optimizer(),
+            "LogToConsole" => false
         ))
         default_gnep_mixin_option = GNEPMixinOption(
             nothing,
@@ -86,8 +86,8 @@ function __init__()
             "LogToConsole" => 0,
             "LogFile" => "grb.criminos.findx.log"
         )) : Model(optimizer_with_attributes(
-            () -> HiGHS.Optimizer(),
-            "log_to_console" => false,
+            () -> COPT.Optimizer(),
+            "LogToConsole" => false
         )),
         nothing,
         nothing
@@ -137,7 +137,8 @@ function simulate(
     Fp;
     K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL],
     bool_verbose=false,
-    bool_opt=true
+    bool_opt=true,
+    tol=1e-7
 ) where {R,TR}
     ε = Dict()
     # --------------------------------------------------
@@ -156,10 +157,10 @@ function simulate(
         Fp(_Vz)
         for (id, z) in enumerate(_Vz)
             # cal FP residual
-            eps[id] = norm(Vz[id].z - z.z)
+            eps[id] = (norm(Vz[id].x - z.x) + norm(Vz[id].y - z.y)) / maximum(z.x)
         end
         kₑ = k
-        if maximum(eps) < 1e-6
+        if maximum(eps) < tol
             @info "converged in $kₑ steps"
             break
         end
@@ -168,6 +169,7 @@ function simulate(
         next!(p)
     end
     finish!(p)
+    @info "final eps: $(maximum(eps))"
     for (id, z) in enumerate(Vz)
         for (func, fname) in metrics
             z₊ = traj[end][id]

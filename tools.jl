@@ -1,5 +1,24 @@
 using LinearAlgebra, SparseArrays, Arpack
 
+generate_empty = (use_html) -> begin
+    plot(
+        extra_plot_kwargs=use_html ? Dict(
+            :include_mathjax => "cdn",
+        ) : Dict(),
+        labelfontsize=20,
+        xtickfont=font(15),
+        ytickfont=font(15),
+        legendfontsize=20,
+        titlefontsize=20,
+        xlabel=L"$j$",
+        ylabel="value",
+        legend=:topright,
+        legendfonthalign=:left,
+        title=L"\beta^{\alpha-1}\cdot c^Tz^+ \leq c^T\bar z^+, ~\beta = 1.5",
+        size=(800, 600),
+    )
+end
+
 function plot_convergence(ε, s)
     pls = []
     for id in 1:s

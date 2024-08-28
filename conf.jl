@@ -44,6 +44,7 @@ group_size = variables_from_yaml["group_size"]
 group_new_ratio = variables_from_yaml["group_new_ratio"]
 group_montonicity = variables_from_yaml["group_montonicity"]
 ι = (1 - √exp(1) / 10)
+
 end
 
 cc = CriminosConfigs
@@ -73,7 +74,7 @@ display(sort(cc.variables_from_yaml))
 println(repeat("-", 80))
 
 if cc.bool_use_html
-    plotlyjs()
+    plotly()
     format = "html"
 else
     pgfplotsx()
@@ -84,9 +85,13 @@ ratio_group = 1 # ratio of trajectories to be plotted
 # -----------------------------------------------------------------------------
 # problem size
 # -----------------------------------------------------------------------------
-Random.seed!(cc.seed_number)
 K = 2000           # number of maximum iterations
-n = 18              # state size: 0, 1, ..., n-1
+if haskey(cc.variables_from_yaml, "slots")
+    n = (cc.variables_from_yaml["slots"] |> maximum) + 1
+else
+    n = 18         # state size: 0, 1, ..., n-1
+end
+println("total number of slots: $n")
 # number of subpopulations
 ℜ = cc.R
 group_size = cc.group_size

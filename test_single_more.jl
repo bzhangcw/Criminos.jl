@@ -108,6 +108,8 @@ if bool_plot_ushape
         fig, "$(cc.result_dir)/param_fitting_ushape.$format"
     )
 end
+
+traj1 = nothing
 if bool_plot_myopt
     series_color = palette(:default)
     fig = plot(
@@ -147,7 +149,7 @@ if bool_plot_myopt
     #     linecolor=series_color[1]
     # )
 
-    traj1 = nothing
+
     L = 2
     @time begin
         _vec_z = [copy(_z) for _z in vec_z]
@@ -222,14 +224,15 @@ if bool_plot_opt
         linewidth=1,
         linestyle=:dot,
     )
-    c = rand(N)
     ω∇ω, G, ι, y, x, gₕ, Hₕ, yₕ, _A, _B, md = _args
 
+    c = ones(N)
     b = c' * expt_inc(vec_z[1].τ)
     σ₁ = (ones(N)' * _B * Σ₁)'
     σ₂ = (ones(N)' * _B * Σ₂)'
     @time begin
         for alpha = 1:5
+            global traj1
             m = Model(optimizer_with_attributes(
                 () -> Gurobi.Optimizer(),
                 "NonConvex" => 2

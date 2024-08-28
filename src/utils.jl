@@ -1,6 +1,8 @@
 using LinearAlgebra
 using JuMP, Gurobi
+using LaTeXStrings
 import MathOptInterface as MOI
+
 
 """
 locate y and x-y 
@@ -33,4 +35,3 @@ function locate_y(size, _y, x_y; x0=nothing)
     delete(model, c2)
     return xx, yy
 end
-

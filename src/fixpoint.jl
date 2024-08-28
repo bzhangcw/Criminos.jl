@@ -48,7 +48,7 @@ function Fₓ(z, Ψ)
     z.ρ .= z.y₋ ./ z.x₋
     z.x .= Ψ.Γ * z.x + Ψ.λ - Ψ.Γₕ * z.y
     z.ρ[z.ρ.==Inf] .= 0
-    # update z, to be delected
+    # update z, to be deleted
     z.z = [z.x; z.ρ]
 end
 
