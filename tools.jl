@@ -4,8 +4,8 @@ switch_to_pdf = () -> begin
     pgfplotsx()
     format = "pdf"
 end
-generate_empty = (use_html) -> begin
-    plot(
+function generate_empty(use_html; title="")
+    return plot(
         extra_plot_kwargs=use_html ? Dict(
             :include_mathjax => "cdn",
         ) : Dict(),
@@ -18,7 +18,7 @@ generate_empty = (use_html) -> begin
         ylabel="value",
         legend=:topright,
         legendfonthalign=:left,
-        title=L"\beta^{\alpha-1}\cdot c^Tz^+ \leq c^T\bar z^+, ~\beta = 1.5",
+        title=title,
         size=(800, 600),
     )
 end
@@ -148,3 +148,62 @@ end
 
 # some empirical distribution tools
 unimodal(n) = [sqrt(exp(-abs(j - n / 3.7))) for j in 1:n]
+
+Base.@kwdef mutable struct AgentData{Tv,Tx}
+    n::Int
+    Tₘ::Int
+    γ::Tv
+    λ::Tv
+    traj_x::Tx
+    traj_x_lb::Tx
+    traj_x_ub::Tx
+    traj_y::Tx
+    traj_y_lb::Tx
+    traj_y_ub::Tx
+
+    AgentData(yaml, Tₘ; n=nothing) = (
+        this = new{Vector{Float64},Matrix{Float64}}();
+        this.Tₘ = Tₘ;
+        _construct_callback(this; yaml=yaml, n=n)
+    )
+end
+fillna(x) = isnan(x) ? 0.0 : x
+function _construct_callback(this; yaml=yaml, n=nothing)
+    # maximum number of slots used in the estimation
+    Tₘ = this.Tₘ
+    if n === nothing
+        this.n = n = (hcat(yaml["x"]...)'[:, Tₘ] .> 0) |> findlast |> Int
+        this.n = n = (hcat(yaml["x"]...)'[:, Tₘ] .> 0) |> findlast |> Int
+        this.traj_x = hcat(yaml["x"]...)'[1:n, 1:Tₘ] .|> fillna
+        this.traj_x_lb = hcat(yaml["lb_x"]...)'[1:n, 1:Tₘ] .|> fillna
+        this.traj_x_ub = hcat(yaml["ub_x"]...)'[1:n, 1:Tₘ] .|> fillna
+        this.traj_y = hcat(yaml["y"]...)'[1:n, 1:Tₘ] .|> fillna
+        this.traj_y_lb = hcat(yaml["lb_y"]...)'[1:n, 1:Tₘ] .|> fillna
+        this.traj_y_ub = hcat(yaml["ub_y"]...)'[1:n, 1:Tₘ] .|> fillna
+        this.γ = yaml["gamma"][1:n] .|> fillna
+        this.λ = yaml["lambda"][1:n] .|> fillna
+        return this
+    end
+    this.n = n
+    n₁ = (hcat(yaml["x"]...)'[:, Tₘ] .> 0) |> findlast |> Int
+    traj_x = hcat(yaml["x"]...)'[1:n₁, 1:Tₘ] .|> fillna
+    traj_x_lb = hcat(yaml["lb_x"]...)'[1:n₁, 1:Tₘ] .|> fillna
+    traj_x_ub = hcat(yaml["ub_x"]...)'[1:n₁, 1:Tₘ] .|> fillna
+    traj_y = hcat(yaml["y"]...)'[1:n₁, 1:Tₘ] .|> fillna
+    traj_y_lb = hcat(yaml["lb_y"]...)'[1:n₁, 1:Tₘ] .|> fillna
+    traj_y_ub = hcat(yaml["ub_y"]...)'[1:n₁, 1:Tₘ] .|> fillna
+
+    n₁, Tmax = traj_y |> size
+    γ = yaml["gamma"][1:n₁] .|> fillna
+    λ = yaml["lambda"][1:n₁] .|> fillna
+    # expand dims to n
+    this.traj_x = [traj_x; zeros(n - n₁, Tmax)]
+    this.traj_x_lb = [traj_x_lb; zeros(n - n₁, Tmax)]
+    this.traj_x_ub = [traj_x_ub; zeros(n - n₁, Tmax)]
+    this.traj_y = [traj_y; zeros(n - n₁, Tmax)]
+    this.traj_y_lb = [traj_y_lb; zeros(n - n₁, Tmax)]
+    this.traj_y_ub = [traj_y_ub; zeros(n - n₁, Tmax)]
+    this.γ = [γ; yaml["gamma"][1] * ones(n - n₁)]
+    this.λ = [λ; zeros(n - n₁)]
+    return this
+end

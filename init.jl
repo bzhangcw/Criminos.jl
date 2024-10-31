@@ -68,25 +68,6 @@ if cc.bool_init
         Criminos.ρ => L"$\bar \rho$",
     )
 
-    #----------------------------------------------------------------------------
-    # for fit_bak
-    Σ₁ = rand(N, N)
-    Σ₁ = Σ₁' * Σ₁ + 1e-2 * I
-    Σ₂ = rand(N, N)
-    Σ₂ = Σ₂' * Σ₂ + 1e-2 * I
-
-    for idx in 1:ℜ
-        if cc.group_montonicity[idx] == 0
-            Σ₁[(idx-1)*n+1:idx*n, (idx-1)*n+1:idx*n] .= 0
-        elseif cc.group_montonicity[idx] == 1
-            Σ₂[(idx-1)*n+1:idx*n, (idx-1)*n+1:idx*n] .= 0
-        end
-    end
-
-    # for fitting
-    Σ = rand(N, N)
-    Σ = Σ' * Σ + 1e-2 * I
-
     P = rand(N, N)
     _D, V = eigen(P + P')
 end

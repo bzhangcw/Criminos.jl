@@ -193,7 +193,7 @@ function generate_fitting_Ωxy(N, n, ℜ;
     ρₛ = yₛ ./ xₛ
     @variable(md, yv[1:N] .>= 0)
     @variable(md, λ[1:N] .>= 0)
-    @variable(md, γ[1:N] .>= 0.10)
+    @variable(md, γ[1:N] .>= 0.1)
     set_upper_bound.(γ[1:N], 0.95)
     # γ = diag([_Ψ.Γ for _Ψ in vec_Ψ]...)
     set_upper_bound.(λ[1:N], xₛ ./ 3)
@@ -210,6 +210,7 @@ function generate_fitting_Ωxy(N, n, ℜ;
 
 
     @constraint(md, yv .== yₛ)
+    @constraint(md, sum(γ) .== 0.781 * N)
     @variable(md, _bv[1:N] .>= 0.0)
     set_upper_bound.(_bv, 1e4)
     @variable(md, bm >= 0)

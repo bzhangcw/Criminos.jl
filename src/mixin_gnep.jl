@@ -36,7 +36,7 @@ function mixed_in_gnep_best!(
     kwargs...
 ) where {R,Tx,Tm}
     # unpacking args,
-    ω∇ω, G, ι, _... = args
+    ω∇ω, G, _... = args
     _n = vector_ms[1].n
     _N = _n * length(vector_ms)
     model = default_gnep_mixin_option.model

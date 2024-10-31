@@ -44,7 +44,6 @@ group_size = variables_from_yaml["group_size"]
 group_new_ratio = variables_from_yaml["group_new_ratio"]
 group_montonicity = variables_from_yaml["group_montonicity"]
 ι = (1 - √exp(1) / 10)
-
 end
 
 cc = CriminosConfigs

@@ -58,7 +58,3 @@ bool_plot_surface: false
 # set random seed to generate random matrices, for reproducibility.
 seed_number: 1
 R: 1
-group_size: [1, 6]
-group_new_ratio: [1, 4]
-# 0-decreasing, 1-increasing, 2-ushape
-group_montonicity: [0, 0]
