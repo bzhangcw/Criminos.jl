@@ -1,5 +1,5 @@
 ################################################################################
-# Mixed-in Functions using GNEP and GPG dynamics
+# Mixed-in Functions using GNEP and GPG Dynamics
 ################################################################################
 
 using JuMP, Gurobi, Ipopt
@@ -36,7 +36,7 @@ function mixed_in_gnep_best!(
     kwargs...
 ) where {R,Tx,Tm}
     # unpacking args,
-    ω∇ω, G, _... = args
+    mipar, ω∇ω, G, _... = args
     _n = vector_ms[1].n
     _N = _n * length(vector_ms)
     model = default_gnep_mixin_option.model
@@ -73,9 +73,10 @@ function mixed_in_gnep_best!(
     ##################################################
     optimize!(model)
 
-    if termination_status(model) ∉ (MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.FEASIBLE_POINT)
+    if termination_status(model) ∉ (
+        MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.FEASIBLE_POINT, MOI.SLOW_PROGRESS
+    )
         @warn "Optimizer did not converge"
-        @info "" model
         @info "" latex_formulation(model)
         @info "" termination_status(model)
         write_to_file(model, "model.lp")

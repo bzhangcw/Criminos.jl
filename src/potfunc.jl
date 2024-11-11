@@ -1,8 +1,7 @@
-
-
 ############################################
-# ordinary potential functions
+# Ordinary Potential/Progress Functions
 ############################################
+
 function Lᵨ(z, z₊; p=1)
     return LinearAlgebra.norm(z.y - z₊.y, p) + 1e-9
 end

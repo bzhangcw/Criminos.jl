@@ -19,9 +19,9 @@ using CSV, Tables, DataFrames
 if cc.bool_init
     Random.seed!(cc.seed_number)
     # ----------------------------------------------------------------------------
-    # decision cost
+    # decision revenue
     # ----------------------------------------------------------------------------
-    cₜ = rand(n) / 10
+    cₜ = ones(n) / 10
 
     # ----------------------------------------------------------------------------
     # initial state
@@ -50,9 +50,6 @@ if cc.bool_init
         z = vec_z[idx]
         vec_z[idx].x .= Ψ.λ + Ψ.Γ * z.x₋ - Ψ.Γₕ * z.y
     end
-
-    # generate data for ℜ population
-    N = n * ℜ
 
     #----------------------------------------------------------------------------
     # get the fixed-point plots 

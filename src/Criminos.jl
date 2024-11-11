@@ -1,16 +1,50 @@
 module Criminos
 
-using JuMP, Gurobi, Ipopt, COPT
+using JuMP, Ipopt, COPT, MosekTools
 using ProgressMeter
 greet() = print("Hello World!")
 
 EPS_FP = 1e-5
 USE_KL = false
 USE_GUROBI = false
+USE_CONIC_DECISION = true
+
+if USE_GUROBI
+    using Gurobi
+    const GRB_ENV = Ref{Gurobi.Env}()
+    GRB_ENV[] = Gurobi.Env()
+    create_default_gurobi_model(logf="/tmp/grb.log") = begin
+        Model(optimizer_with_attributes(
+            () -> Gurobi.Optimizer(GRB_ENV[]),
+            "NonConvex" => 2,
+            "LogToConsole" => 0,
+            "LogFile" => logf
+        ))
+    end
+end
+if USE_KL
+    using Ipopt
+    create_default_ipopt_model() = begin
+        Model(optimizer_with_attributes(
+            () -> Ipopt.Optimizer(),
+            "print_level" => 0
+        ))
+    end
+end
+
+create_default_copt_model() = begin
+    Model(
+        optimizer_with_attributes(
+            () -> COPT.Optimizer(),
+            "LogToConsole" => false
+        ))
+end
+
 ℓ = 1
-struct BarrierOption
+mutable struct BarrierOption
     μ::Float64
 end
+
 mutable struct GNEPMixinOption
     y::Union{Nothing,Any}
     ycon::Union{Nothing,Any}
@@ -35,23 +69,21 @@ mutable struct DecisionOption
     I::Union{Nothing,Any}
     τcon::Union{Nothing,Any}
     is_setup::Bool
+    is_conic::Bool
     model::Union{Nothing,Model}
 end
 
-const GRB_ENV = Ref{Gurobi.Env}()
-default_barrier_option = BarrierOption(1e-2)
+
+default_barrier_option = BarrierOption(5e-2)
 default_gnep_mixin_option = Ref{GNEPMixinOption}()
 default_xinit_option = Ref{XInitHelper}()
 default_decision_option = Ref{DecisionOption}()
+default_decision_conic_option = Ref{DecisionOption}()
 function __init__()
-    global default_gnep_mixin_option, default_xinit_option, default_decision_option
+    global default_gnep_mixin_option, default_xinit_option
+    global default_decision_option, default_decision_conic_option
     if USE_GUROBI
-        GRB_ENV[] = Gurobi.Env()
-        _md = Model(optimizer_with_attributes(
-            () -> Gurobi.Optimizer(GRB_ENV[]),
-            "NonConvex" => 2,
-            "LogToConsole" => 0
-        ))
+        create_default_gurobi_model()
         default_gnep_mixin_option = GNEPMixinOption(
             nothing,
             nothing,
@@ -59,39 +91,42 @@ function __init__()
             USE_KL,
             _md
         )
+    elseif USE_KL
+        _md = create_default_ipopt_model()
     else
-        _md = USE_KL ? Model(optimizer_with_attributes(
-            () -> Ipopt.Optimizer(),
-            "print_level" => 0
-        )) : Model(optimizer_with_attributes(
-            () -> COPT.Optimizer(),
-            "LogToConsole" => false
-        ))
-        default_gnep_mixin_option = GNEPMixinOption(
-            nothing,
-            nothing,
-            false,
-            USE_KL,
-            _md
-        )
+        _md = create_default_copt_model()
     end
-
+    default_gnep_mixin_option = GNEPMixinOption(
+        nothing,
+        nothing,
+        false,
+        USE_KL,
+        _md
+    )
     default_xinit_option = XInitHelper(
         nothing,
         nothing,
         false,
-        USE_GUROBI ? Model(optimizer_with_attributes(
-            () -> Gurobi.Optimizer(GRB_ENV[]),
-            "NonConvex" => 2,
-            "LogToConsole" => 0,
-            "LogFile" => "grb.criminos.findx.log"
-        )) : Model(optimizer_with_attributes(
-            () -> COPT.Optimizer(),
-            "LogToConsole" => false
-        )),
+        create_default_copt_model(),
         nothing,
         nothing
     )
+    if USE_CONIC_DECISION
+        _md_decision = Model(optimizer_with_attributes(
+            () -> Mosek.Optimizer(),
+            "MSK_IPAR_LOG" => 0
+        ))
+        default_decision_conic_option = DecisionOption(
+            nothing,
+            nothing,
+            nothing,
+            nothing,
+            nothing,
+            false,
+            USE_CONIC_DECISION,
+            _md_decision
+        )
+    end
     default_decision_option = DecisionOption(
         nothing,
         nothing,
@@ -99,21 +134,15 @@ function __init__()
         nothing,
         nothing,
         false,
-        # Model(optimizer_with_attributes(
-        #     () -> Ipopt.Optimizer(),
-        #     "print_level" => 0
-        # ))
-        Model(optimizer_with_attributes(
-            () -> COPT.Optimizer(),
-            "LogToConsole" => false
-        ))
+        false,
+        create_default_copt_model()
     )
 end
 
 export default_barrier_option
 export default_gnep_mixin_option
 export default_xinit_option
-export default_decision_option
+export default_decision_option, default_decision_conic_option
 
 ##################################################
 # sigfault when using constant env here.
@@ -128,6 +157,8 @@ include("mixin.jl")
 include("potfunc.jl")
 include("utils.jl")
 include("decision.jl")
+include("fit.jl")
+include("fittraj.jl")
 
 export find_x
 
@@ -184,4 +215,6 @@ export MarkovState
 export BidiagSys
 export F!
 export optalg, ν, σ
+export tuning
+export fit_trajectory
 end # module Criminos

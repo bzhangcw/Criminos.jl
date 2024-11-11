@@ -1,9 +1,22 @@
 using LinearAlgebra, SparseArrays, Arpack
+using Plots
 
 switch_to_pdf = () -> begin
     pgfplotsx()
     format = "pdf"
 end
+
+function reset_size(n, R)
+    cc.n = n
+    cc.R = R
+    cc.N = R * n
+    @info """reset size to
+    n: $(cc.n)
+    R: $(cc.R)
+    N: $(cc.N) 
+    """
+end
+
 function generate_empty(use_html; title="")
     return plot(
         extra_plot_kwargs=use_html ? Dict(
@@ -182,6 +195,7 @@ function _construct_callback(this; yaml=yaml, n=nothing)
         this.traj_y_ub = hcat(yaml["ub_y"]...)'[1:n, 1:Tₘ] .|> fillna
         this.γ = yaml["gamma"][1:n] .|> fillna
         this.λ = yaml["lambda"][1:n] .|> fillna
+        @info "size corrected to" this.n
         return this
     end
     this.n = n
@@ -205,5 +219,235 @@ function _construct_callback(this; yaml=yaml, n=nothing)
     this.traj_y_ub = [traj_y_ub; zeros(n - n₁, Tmax)]
     this.γ = [γ; yaml["gamma"][1] * ones(n - n₁)]
     this.λ = [λ; zeros(n - n₁)]
+    @info "size corrected to" this.n
     return this
 end
+
+function plot_fitting_results(data, r; bool_pdf=false)
+    yₛ = data.traj_y[:, end]
+    xₛ = data.traj_x[:, end]
+
+    if bool_pdf
+        switch_to_pdf()
+    else
+        plotly()
+    end
+    series_color = palette(:default)
+    fig = generate_empty(cc.bool_use_html)
+    plot!(
+        1:n, yₛ,
+        labels=L"y_T^{\texttt{a}}",
+        linestyle=:dot,
+        color=series_color[1],
+        linewidth=3,
+    )
+    plot!(
+        1:n, data.traj_y_lb[:, end], fillrange=data.traj_y_ub[:, end],
+        labels=L"$y_T^\texttt{a}$ (CI)",
+        fillalpha=0.3,
+        linestyle=:dot,
+        color=series_color[1],
+    )
+
+    plot!(
+        1:n, r.y,
+        label=L"$y_T$",
+        linewidth=3,
+        color=series_color[2]
+    )
+    fig1 = generate_empty(cc.bool_use_html)
+    plot!(
+        1:n, xₛ,
+        labels=L"x_T^{\texttt{a}}",
+        linestyle=:dot,
+        color=series_color[1],
+        linewidth=3,
+    )
+    plot!(
+        1:n, data.traj_x_lb[:, end], fillrange=data.traj_x_ub[:, end],
+        labels=L"$x_T^{\texttt{a}}$ (CI)",
+        fillalpha=0.3,
+        linestyle=:dot,
+        color=series_color[1],
+    )
+
+    plot!(
+        1:n, r.x,
+        label=L"$x_T$",
+        linewidth=3,
+        color=series_color[2]
+    )
+
+    # total number
+    fig2 = generate_empty(cc.bool_use_html)
+
+    ysum = [sum(j[1].y) for j in traj]
+    L = min(length(ysum), Tₘ)
+    plot!(
+        sum(data.traj_y; dims=1)[:][1:L],
+        labels=L"y_T^{\texttt{a}}",
+        linestyle=:dot,
+        color=series_color[1],
+        linewidth=3,
+        xlabel=L"t"
+    )
+    plot!(
+        sum(data.traj_y_lb; dims=1)[:][1:L], fillrange=sum(data.traj_y_ub; dims=1)[:][1:L],
+        labels=L"$y_T^{\texttt{a}}$ (CI)",
+        fillalpha=0.3,
+        linestyle=:dot,
+        color=series_color[1],
+    )
+    plot!(
+        ysum[1:L],
+        label=L"$y_T$",
+        linewidth=3,
+        color=series_color[2]
+    )
+    fig3 = generate_empty(cc.bool_use_html)
+
+    xsum = [sum(j[1].x) for j in traj]
+    plot!(
+        sum(data.traj_x; dims=1)[:][1:L],
+        labels=L"x_T^{\texttt{a}}",
+        linestyle=:dot,
+        color=series_color[1],
+        linewidth=3,
+        xlabel=L"t"
+    )
+    plot!(
+        sum(data.traj_x_lb; dims=1)[:][1:L], fillrange=sum(data.traj_x_ub; dims=1)[:][1:L],
+        labels=L"$x_T^{\texttt{a}}$ (CI)",
+        fillalpha=0.3,
+        linestyle=:dot,
+        color=series_color[1],
+    )
+
+    plot!(
+        xsum[1:L],
+        label=L"$x_T$",
+        linewidth=3,
+        color=series_color[2]
+    )
+    return fig, fig1, fig2, fig3
+end
+
+# switch_to_pdf()
+# pgfplotsx()
+# series_color = palette(:default)
+# fig = generate_empty(false; title="")
+# plot!(
+#     1:n, yₛ,
+#     labels=L"y_T^\texttt{a}",
+#     linestyle=:dot,
+#     color=series_color[1],
+#     linewidth=3,
+#     labelfontsize=24,
+#     xtickfont=font(20),
+#     ytickfont=font(20),
+#     legendfontsize=24,
+# )
+# plot!(
+#     1:n, traj_y_lb[:, end], fillrange=traj_y_ub[:, end],
+#     labels=L"$y_T^\texttt{a}$ (CI)",
+#     fillalpha=0.3,
+#     linestyle=:dot,
+#     color=series_color[1],
+# )
+
+# plot!(
+#     1:n, r.y,
+#     label=L"$y_T$",
+#     linewidth=3,
+#     color=series_color[2]
+# )
+# fig1 = generate_empty(false)
+# plot!(
+#     1:n, xₛ,
+#     labels=L"x_T^\texttt{a}",
+#     linestyle=:dot,
+#     color=series_color[1],
+#     linewidth=3,
+#     labelfontsize=24,
+#     xtickfont=font(20),
+#     ytickfont=font(20),
+#     legendfontsize=24,
+# )
+# plot!(
+#     1:n, traj_x_lb[:, end], fillrange=traj_x_ub[:, end],
+#     labels=L"$x_T^\texttt{a}$ (CI)",
+#     fillalpha=0.3,
+#     linestyle=:dot,
+#     color=series_color[1],
+# )
+
+# plot!(
+#     1:n, r.x,
+#     label=L"$x_T$",
+#     linewidth=3,
+#     color=series_color[2]
+# )
+
+# # total number
+# fig2 = generate_empty(false)
+
+# ysum = [sum(j[1].y) for j in traj]
+# L = min(length(ysum), 100)
+# plot!(
+#     sum(traj_y; dims=1)[:][1:L],
+#     labels=L"\sum y_{t}^\texttt{a}",
+#     linestyle=:dot,
+#     color=series_color[1],
+#     linewidth=3,
+#     xlabel=L"t",
+#     labelfontsize=24,
+#     xtickfont=font(20),
+#     ytickfont=font(20),
+#     legendfontsize=22,
+#     yscale=:log10
+# )
+# plot!(
+#     sum(traj_y_lb; dims=1)[:][1:L], fillrange=sum(traj_y_ub; dims=1)[:][1:L],
+#     labels=L"$\sum y_{t}^\texttt{a}$ (CI)",
+#     fillalpha=0.3,
+#     linestyle=:dot,
+#     color=series_color[1],
+# )
+
+# plot!(
+#     ysum[1:L],
+#     label=L"$\sum y_{t}$",
+#     linewidth=3,
+#     color=series_color[2]
+# )
+# fig3 = generate_empty(false)
+
+# xsum = [sum(j[1].x) for j in traj]
+# L = length(ysum)
+# plot!(
+#     sum(traj_x; dims=1)[:][1:L],
+#     labels=L"\sum x_{t}^\texttt{a}",
+#     linestyle=:dot,
+#     color=series_color[1],
+#     linewidth=3,
+#     xlabel=L"t",
+#     labelfontsize=24,
+#     xtickfont=font(20),
+#     ytickfont=font(20),
+#     legendfontsize=22,
+#     yscale=:log10
+# )
+# plot!(
+#     sum(traj_x_lb; dims=1)[:][1:L], fillrange=sum(traj_x_ub; dims=1)[:][1:L],
+#     labels=L"$\sum x_{t}^\texttt{a}$ (CI)",
+#     fillalpha=0.3,
+#     linestyle=:dot,
+#     color=series_color[1],
+# )
+
+# plot!(
+#     xsum[1:L],
+#     label=L"$\sum x_{t}$",
+#     linewidth=3,
+#     color=series_color[2]
+# )

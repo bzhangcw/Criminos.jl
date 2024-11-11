@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 import imageio
 
 
-def plot_histograms(grouped_results):
+def plot_histograms(grouped_results, *counters):
+    all_values, counts_N_full, counts_Np_full, counts_R_full, *_ = counters
     num_plots = len(grouped_results)
     if num_plots > 1:
         for i in range(0, num_plots, plots_per_fig):
@@ -55,7 +56,7 @@ def plot_histograms(grouped_results):
 import plotly.graph_objs as go
 
 
-def plot_grouped_histograms_with_slider(grouped_results):
+def plot_grouped_histograms_with_slider(grouped_results, *counters):
     num_plots = len(grouped_results)
 
     # Create a figure
@@ -110,7 +111,9 @@ def plot_grouped_histograms_with_slider(grouped_results):
     return fig
 
 
-def plot_grouped_histograms_with_gif(grouped_results, gif_name="animation.gif"):
+def plot_grouped_histograms_with_gif(
+    grouped_results, *counters, gif_name="animation.gif"
+):
 
     num_plots = len(grouped_results)
     fig = go.Figure()
@@ -158,7 +161,9 @@ def plot_grouped_histograms_with_gif(grouped_results, gif_name="animation.gif"):
     return fig
 
 
-def plot_grouped_histograms_with_gif_plt(grouped_results, gif_name="animation.gif"):
+def plot_grouped_histograms_with_gif_plt(
+    grouped_results, *counters, gif_name="animation.gif"
+):
     num_plots = len(grouped_results)
 
     # Create a directory to save frames

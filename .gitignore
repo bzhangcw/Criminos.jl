@@ -1,4 +1,7 @@
 # extras
+ipynb/*
+@milestone-*
+result-*
 archive
 *.csv
 # doc

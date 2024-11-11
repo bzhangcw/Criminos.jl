@@ -2,7 +2,7 @@
 module CriminosConfigs
 using Base.Filesystem, Dates, YAML, Criminos
 
-
+n = 18
 f_config = haskey(ENV, "CRIMINOS_CONF") ? ENV["CRIMINOS_CONF"] : "confs/conf.yaml"
 alias = haskey(ENV, "CRIMINOS_ALIAS") ? ENV["CRIMINOS_ALIAS"] : nothing
 
@@ -40,6 +40,7 @@ bool_plot_surface = variables_from_yaml["bool_plot_surface"]
 τₕ = variables_from_yaml["τₕ"]
 seed_number = variables_from_yaml["seed_number"]
 R = variables_from_yaml["R"]
+N = R * n
 group_size = variables_from_yaml["group_size"]
 group_new_ratio = variables_from_yaml["group_new_ratio"]
 group_montonicity = variables_from_yaml["group_montonicity"]
@@ -86,12 +87,15 @@ ratio_group = 1 # ratio of trajectories to be plotted
 # -----------------------------------------------------------------------------
 K = 2000           # number of maximum iterations
 if haskey(cc.variables_from_yaml, "slots")
-    n = (cc.variables_from_yaml["slots"] |> maximum) + 1
+    cc.n = n = (cc.variables_from_yaml["slots"] |> maximum) + 1
 else
-    n = 18         # state size: 0, 1, ..., n-1
+    cc.n = n = 18         # state size: 0, 1, ..., n-1
 end
+
 println("total number of slots: $n")
 # number of subpopulations
 ℜ = cc.R
+# generate data for ℜ population
+cc.N = N = cc.n * cc.R
 group_size = cc.group_size
 group_new_ratio = cc.group_new_ratio
