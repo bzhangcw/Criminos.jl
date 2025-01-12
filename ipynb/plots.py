@@ -200,3 +200,62 @@ def plot_grouped_histograms_with_gif_plt(
     imageio.mimsave(gif_name, images, fps=2)
 
     return gif_name
+
+
+def plot_slider_for_two_columns(df, second_col, third_col):
+    """
+    Creates a slider based on unique values of df['N']. 
+    For each slider step (each N), shows a Scatter (line) plot
+    of second_col (x-axis) vs. third_col (y-axis).
+    """
+    unique_n = df["N"].unique()
+    fig = go.Figure()
+
+    for i, n_val in enumerate(unique_n):
+        subset = df[df["N"] == n_val].sort_values(by=second_col)
+        fig.add_trace(
+            go.Scatter(
+                x=subset[second_col],
+                y=subset[third_col],
+                mode="lines+markers",
+                name=f"N={n_val}",
+                visible=(i == 0),  # Only show the first trace initially
+            )
+        )
+
+    # Create slider steps
+    steps = []
+    for i, n_val in enumerate(unique_n):
+        step = dict(
+            method="update",
+            args=[
+                {"visible": [False] * len(unique_n)},  
+                {"title": f"{second_col} vs {third_col} for N={n_val}"}
+            ],
+            label=str(n_val),
+        )
+        step["args"][0]["visible"][i] = True  # Make only the i-th trace visible
+        steps.append(step)
+
+    # Slider definition
+    sliders = [
+        dict(
+            active=0,
+            currentvalue={"prefix": "N: "},
+            pad={"t": 50},
+            steps=steps
+        )
+    ]
+
+    # Update layout
+    fig.update_layout(
+        sliders=sliders,
+        title=f"{second_col} vs {third_col} by N",
+        xaxis_title=second_col,
+        yaxis_title=third_col,
+        height=600,
+        width=800,
+    )
+
+    fig.show()
+    return fig

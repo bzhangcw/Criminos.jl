@@ -97,7 +97,7 @@ function fit_trajectory(
         _H = value.(Hv)
         _g = value.(gv)
 
-        ω∇ω(y, τ) = begin
+        ω∇ω(y, τ, x) = begin
             _w = 1 / 2 * y' * _H * y + y' * _g
             ∇ = _H * y + _g
             _w, ∇

@@ -99,7 +99,7 @@ function generate_fitting_ρ(N, n, ℜ;
     @info "" maximum(abs.(y₊ ./ β .- y))
     @info "" (yₕ(τₛ .* 1000)) |> sum
 
-    ω∇ω(y, τ) = begin
+    ω∇ω(y, τ, x) = begin
         _H = Hₕ(τ) + G
         # _g = -gₕ(τ) - _Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.λ
         _g = -gₕ(τ) - vcat([_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.λ for _Ψ in vec_Ψ]...)

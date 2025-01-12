@@ -118,9 +118,9 @@ version = "1.0.8+2"
 
 [[deps.COPT]]
 deps = ["LazyArtifacts", "Libdl", "LinearAlgebra", "MathOptInterface", "Pkg", "Random", "SparseArrays"]
-git-tree-sha1 = "ff591fb752d5798fa9c0d0548d94b52bbf1544fc"
+git-tree-sha1 = "0c87eba5590802cdd11f349c6e3fbd230aee4d1c"
 uuid = "227a2e2d-e949-4d8e-a1da-7384fe6f0b9f"
-version = "1.1.19"
+version = "1.1.20"
 
 [[deps.CSV]]
 deps = ["CodecZlib", "Dates", "FilePathsBase", "InlineStrings", "Mmap", "Parsers", "PooledArrays", "PrecompileTools", "SentinelArrays", "Tables", "Unicode", "WeakRefStrings", "WorkerUtilities"]

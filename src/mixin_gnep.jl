@@ -66,8 +66,9 @@ function mixed_in_gnep_best!(
     end
     # repeat the blocks
     _τ = vcat([z.τ .* z.β for z in vector_ms]...)
+    _x = vcat([z.x for z in vector_ms]...)
     ##################################################
-    _w, ∇ω = ω∇ω(y, _τ)
+    _w, ∇ω = ω∇ω(y, _τ, _x)
     _f_expr = _φ + _w
     @objective(model, Min, _f_expr)
     ##################################################

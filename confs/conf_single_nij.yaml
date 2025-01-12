@@ -34,6 +34,7 @@ style_mixin: "mixed_in_gnep_best!"
 # style_mixin_parameterization: "random"
 # style_mixin_parameterization: "fitting"
 style_mixin_parameterization: "fittingxy"
+# style_mixin_parameterization: "fittingxy_incarceration"
 style_mixin_monotonicity: 2
 # style_decision: "decision_null!"
 style_decision: "decision_identity!"

@@ -95,7 +95,21 @@ function tuning(
             vec_Ψ=vec_Ψ,
             bool_H_diag=bool_H_diag
         )
+    elseif cc.style_mixin_parameterization == :fittingxy_incarceration
+        _args = generate_fitting_xy_incarceration(
+            cc.N, cc.n, cc.R;
+            xₛ=xₛ,
+            yₛ=yₛ,
+            τₛ=τₛ,
+            Σ₁=Σ₁,
+            Σ₂=Σ₂,
+            style_mixin_monotonicity=style_mixin_monotonicity,
+            cc=cc,
+            vec_Ψ=vec_Ψ,
+            bool_H_diag=bool_H_diag
+        )
     end
+
     return _args
 end
 
@@ -130,7 +144,7 @@ function generate_random(
         Ω = (∇₀, H₀, ∇ₜ, Hₜ)
     end
     ∇₀, H₀, ∇ₜ, Hₜ, _... = Ω
-    ω∇ω(y, τ) = begin
+    ω∇ω(y, τ, x) = begin
         _t = τ .+ 1
         _T = diagm(τ)
         # Cₜ = diagm(τ) * Hₜ * diagm(τ) + H₀
@@ -220,7 +234,7 @@ function generate_fitting_xy(
     if style_mixin_monotonicity != 2
         @error("not implemented")
     else
-        # U-shaped: increasing and decreasing
+        # U-shaped: increasing and decreasing, old style
         # - increasing controlled by Σ₁
         # - decreasing controlled by Σ₂
         @constraint(md, (_Bv * Σ₁ * θ₁ + _Bv * Σ₂ * θ₂) .== yv)
@@ -297,7 +311,7 @@ function generate_fitting_xy(
     τ₀ .= 0.01
     @info "" (yₛ |> sum) sum(yₕ(τᵢ)) sum(yₕ(τ₀))
 
-    ω∇ω(y, τ) = begin
+    ω∇ω(y, τ, x) = begin
         _H = Hₕ(τ) + G
         _g = -gₕ(τ) - vcat(
             [_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.λ for _Ψ in vec_Ψ]...
@@ -310,5 +324,168 @@ function generate_fitting_xy(
     return mipar, ω∇ω, G, y, x, gₕ, Hₕ, yₕ, _A, _B, md
 end
 
+
+function generate_fitting_xy_incarceration(
+    N, n, ℜ;
+    # -------------------------------------
+    # equilibria information
+    xₛ=nothing, # must provide
+    yₛ=nothing, # must provide
+    τₛ=rand(N), # the static τ at default
+    λ=nothing, # optional 
+    γ=nothing, # optional 
+    # -------------------------------------
+    cc=nothing,
+    vec_Ψ=nothing,
+    Σ₁=nothing,
+    Σ₂=nothing,
+    style_mixin_monotonicity=2,
+    # the functional form
+    style_function=1,
+    # the lower bound PSD matrix; 
+    # strongly convex is desired
+    bool_H_diag=true,
+    ϵₕ=5e-1,
+    # very likely to be infeasible
+    bool_γ_same=false,
+)
+    @info """
+    fitting at equilibria by (x, y)
+    """
+    θ₁ = expt_inc(τₛ)
+    # θ₁ = τₛ
+    # θ₂ = expt_dec(τₛ)
+
+    md = Model(optimizer_with_attributes(
+        () -> COPT.ConeOptimizer(),
+    ))
+    @variable(md, yv[1:N] .>= 0)
+
+    # --------------------------------------------------
+    # if there is no external λ and γ
+    # set these to be optimized
+    # set bounds to γ and λ: these are myoptic
+    if isnothing(λ)
+        @info "fitting λ"
+        @variable(md, λ[1:N] .>= 0)
+        set_upper_bound.(λ[1:N], xₛ ./ 2)
+    end
+    if isnothing(γ)
+        @info "fitting γ"
+        @variable(md, γ[1:N] .>= 0.02)
+        set_upper_bound.(γ[1:N], 0.99)
+        begin
+            @variable(md, γ₀)
+            bool_γ_same && @constraint(md, γ[1:N] .== γ₀)
+        end
+    end
+    # --------------------------------------------------
+
+    @constraint(md, yv .== yₛ)
+    @variable(md, _av[1:N] .>= 0.0)
+    @variable(md, _bv[1:N] .>= 0.0)
+    @variable(md, _bva[1:N] .>= 0.0)
+    @variable(md, _dv[1:N])
+    @variable(md, _cv[1:N] .>= 0.0)
+    set_upper_bound.(_av, 5e-1)#0.1014 ./ τₛ)
+    @constraint(md, _bva .>= _bv .- 2.461)
+    @constraint(md, _bva .>= -_bv .+ 2.461)
+    set_upper_bound.(_cv, 1e5)
+    if bool_H_diag
+        _Av = diagm(_av)
+    else
+        # bounded full rank PSD mode
+        @variable(md, _Av[1:N, 1:N], PSD)
+        set_upper_bound.(_Av, 1e4)
+        @constraint(md, _Av <= 1e3I, PSDCone())
+        @constraint(md, _Av >= 0.1I, PSDCone())
+    end
+
+    if style_mixin_monotonicity != 2
+        @error("not implemented")
+    else
+        # U-shaped: increasing and decreasing, old style
+        # - increasing controlled by Σ₁
+        # - decreasing controlled by Σ₂
+        @constraint(md, _cv - _bv .* yₛ .== _dv)
+        @constraint(md, _Av * diagm(θ₁) * yₛ .== _dv)
+    end
+    for (id, _Ψ) in enumerate(vec_Ψ)
+        rg = (id-1)*n+1:id*n
+        Γ = diagm(γ[rg])
+        Γₕ = _Ψ.M * Γ
+        @constraint(
+            md, λ[rg] - Γₕ * yₛ[rg] .== (I - Γ) * xₛ[rg]
+        )
+    end
+    @objective(md, Min, sum(_bva) - sum(_av))
+    optimize!(md)
+
+    if termination_status(md) ∈ [MOI.OPTIMAL, MOI.ALMOST_OPTIMAL, MOI.SLOW_PROGRESS]
+    else
+        @warn "Optimizer did not converge"
+        write_to_file(md, "model.lp")
+        @info "" termination_status(md)
+        return md
+    end
+
+    # we retrieve λ from the optimization problem
+    for (id, _Ψ) in enumerate(vec_Ψ)
+        rg = (id-1)*n+1:id*n
+        _λ = value.(λ[rg])
+        _γ = value.(γ[rg])
+        _Γ = diagm(_γ)
+        _Γₕ = _Ψ.M * _Γ
+        _Ψ.λ .= _λ
+        _Ψ.γ .= _γ
+        _Ψ.Γ .= _Γ
+        _Ψ.Γₕ .= _Γₕ
+    end
+
+    # shifting parameter
+    G = blockdiag(
+        [sparse(_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.Γₕ)
+         for _Ψ in vec_Ψ]...
+    )
+
+    # --------------------------------------------------
+    # get values and produce mixed-in effect params
+    # --------------------------------------------------
+    y = value.(yv)
+    x = vcat([1 ./ (1 .- _Ψ.γ) .* (_Ψ.λ - _Ψ.Γₕ * y[(id-1)*n+1:id*n])
+              for (id, _Ψ) in enumerate(vec_Ψ)]...)
+    c = value.(_cv)
+    _A = value.(_Av)
+    _B = value.(_Av)
+
+    Hₕ(τ) = _A * diagm(expt_inc(τ)) + diagm(value.(_bv))
+    gₕ(τ) = c
+    yₕ(τ) = Hₕ(τ) \ gₕ(τ)
+
+    # get mixed-in effect parameters struct
+    mipar = MixedInParams(Σ₁, Σ₂, _B, _A)
+
+    @info "" maximum(abs.(y - yₛ))
+    @info "" maximum(abs.(x - xₛ))
+    @info "" maximum(abs.(yₕ(τₛ) .- yₛ) / norm(yₛ, 1))
+    @info "" maximum(abs.(gety(mipar, expt_inc(τₛ), expt_dec(τₛ)) .- yₛ) / norm(yₛ, 1))
+    τᵢ = similar(τₛ)
+    τᵢ .= 10.0
+    τ₀ = similar(τₛ)
+    τ₀ .= 0.01
+    @info "" (yₛ |> sum) sum(yₕ(τᵢ)) sum(yₕ(τ₀))
+
+    ω∇ω(y, τ, x) = begin
+        _H = Hₕ(τ) + G
+        _g = -gₕ(τ) - vcat(
+            [_Ψ.Γₕ' * inv(I - _Ψ.Γ) * _Ψ.λ for _Ψ in vec_Ψ]...
+        )
+        _w = 1 / 2 * y' * _H * y + y' * _g
+        ∇ = _H * y + _g
+        _w, ∇
+    end
+
+    return mipar, ω∇ω, G, y, x, gₕ, Hₕ, yₕ, _A, _B, md
+end
 
 include("fit.depre.jl")
