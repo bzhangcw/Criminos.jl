@@ -216,5 +216,5 @@ export BidiagSys
 export F!
 export optalg, ν, σ
 export tuning
-export fit_trajectory
+export fit_trajectory, fit_mp, fit_cournot, fit_cournot_traj
 end # module Criminos

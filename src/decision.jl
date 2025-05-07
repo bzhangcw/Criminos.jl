@@ -1,5 +1,5 @@
 ################################################################################
-# Decision Rules and Wrappers
+# Decision Rules and Wrappers based on τ directly
 ################################################################################
 # the decision is made as a centralized player τ
 using Optim, LineSearches
@@ -66,59 +66,69 @@ This function performs decision matching optimization.
 - `Tx`: Type parameter.
 - `Tm`: Type parameter.
 """
-function decision_priority_by_opt!(
+expcone!(τ, r, model) = @constraint(
+    model, [τ + 1, 1, r] in MOI.ExponentialCone()
+)
+function decision_priority_by_τ!(
     vector_ms::Vector{MarkovState{R,Tx}},
     vec_Ψ::Vector{BidiagSys{Tx,Tm}};
     args=nothing,
     kwargs...
 ) where {R,Tx,Tm}
-    mipar, decision_option, cₜ, τₗ, τₕ, Δ, δ, _unused_args... = args
+    mipar, decision_option, cₜ, aₜ, δ, lb, ub, τₛ, _unused_args... = args
     _n = vector_ms[1].n
     _N = _n * length(vector_ms)
     model = decision_option.model
     if decision_option.is_setup == false
         @variable(model, τ[1:_N] .>= 0)
-        @variable(model, h[1:_N] .>= 0)
-        @variable(model, θ[1:_N]) # redundant if not conic
+        @variable(model, r[1:_N])
+        @variable(model, h[1:_N, 1:3] .>= 0)
         decision_option.is_setup = true
         decision_option.τ = τ
         decision_option.h = h
         decision_option.τcon = []
-        @constraint(model, τ .- τₗ .* (1 .- h) - h .* τₕ .== 0)
+        # @constraint(model, sum(h, dims=2) .== 1)
+        # for j in 1:_N
+        #     @constraint(model, τ[j] - h[j, :]' * aₜ .== 0)
+        # end
         if decision_option.is_conic
-            expt_inc_cone!.(τ, θ, model)
+            # -log.(τ + 1) <= r => [τ + 1, 1, -r] in EC
+            for j in 1:_N
+                @constraint(
+                    model, [τ[j] + 1, 1, r[j]] in MOI.ExponentialCone()
+                )
+            end
         end
     end
     _φ = 0.0
     τ = decision_option.τ
     h = decision_option.h
-    θ = model[:θ]
+    r = model[:r]
     for c in decision_option.τcon
         delete(model, c)
     end
     decision_option.τcon = []
+    set_lower_bound.(τ, lb)
+    set_upper_bound.(τ, ub)
     for (id, z) in enumerate(vector_ms)
         _x = z.x₋
         _y = z.y
         _τ = τ[(id-1)*_n+1:id*_n]
         _h = h[(id-1)*_n+1:id*_n]
+        _r = r[(id-1)*_n+1:id*_n]
 
-        set_upper_bound.(_h, min.(_y ./ _x .+ Δ, 1.0))
-        set_lower_bound.(_h, max.(_y ./ _x .- Δ, 0.0))
         push!(
             decision_option.τcon,
             # Equal Opportunity
-            @constraint(model, δ * sum(_x - _y) - _h' * (_x - _y) .>= 0)
+            @constraint(model, _y' * _τ <= δ)
             # Equal Probability
             # @constraint(model, δ * sum(_x) - _τ' * _y .>= 0)
         )
-        # the revenue/cost is unit to the population size
         # that is, accumulated by each individual
         if decision_option.is_conic
-            _θ = θ[(id-1)*_n+1:id*_n]
-            _φ += sum(gety(mipar, zeros(_θ |> length), _θ))
+            _φ += cₜ' * _r
         else
-            _φ += -_τ' * (cₜ .* _x)
+            _φ += cₜ' * (_τ ./ τₛ)
         end
     end
     @objective(model, Min, _φ)
@@ -140,74 +150,6 @@ function decision_priority_by_opt!(
     end
 end
 
-@doc raw"""
-Alternative to `decision_priority_by_opt!` that uses simple priority rule, 
-    it is equivalent
-"""
-function decision_priority!(
-    z, Ψ;
-    args=nothing,
-    baropt=default_barrier_option,
-    kwargs...
-)
-    cₜ, τₗ, τₕ, Δ, δ, _... = args
-    _x = z.x₋
-    _y = z.y
-    c = cₜ .* _x
-    a = _x - _y
-    b = sum(a .* (-_y ./ (_x .+ 1e-4) .+ (δ + Δ)))
 
-    q, total_a, total_c = knapsack_with_ub(c, a, b, 2 * Δ)
-
-    h = _y ./ _x .- Δ + q
-
-    return h
-end
-
-
-function knapsack_with_ub(
-    c::Vector{Float64},
-    a::Vector{Float64},
-    b::Float64,
-    d::Float64
-)
-    n = length(c)
-    @assert length(a) == n "Arrays 'c' and 'a' must be of the same length."
-
-    # Compute the ratios c_i / a_i
-    ratios = c ./ a
-
-    # Handle cases where a_i is zero to avoid division by zero
-    for i in eachindex(a)
-        if a[i] == 0.0
-            ratios[i] = Inf  # Assign infinite ratio if a_i is zero
-        end
-    end
-
-    # Get the indices that would sort the ratios in descending order
-    sorted_indices = sortperm(ratios, rev=true)
-
-    x = zeros(Float64, n)  # Quantities of each item selected
-    total_a = 0.0
-    total_c = 0.0
-
-    for idx in sorted_indices
-        if total_a >= b
-            break
-        end
-        remaining_capacity = b - total_a
-        max_possible_xi = min(d, remaining_capacity / a[idx])
-        if max_possible_xi <= 0.0
-            continue  # Cannot take any more of this item
-        end
-        x_i = max_possible_xi
-        x[idx] = x_i
-        total_a += a[idx] * x_i
-        total_c += c[idx] * x_i
-    end
-
-    selected_indices = findall(x .> 0)
-    return x, total_a, total_c
-end
-
+include("decisionh.jl")
 include("decision.depre.jl")

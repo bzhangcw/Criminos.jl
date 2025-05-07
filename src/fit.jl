@@ -110,6 +110,7 @@ function tuning(
         )
     end
 
+
     return _args
 end
 
@@ -488,4 +489,7 @@ function generate_fitting_xy_incarceration(
     return mipar, ω∇ω, G, y, x, gₕ, Hₕ, yₕ, _A, _B, md
 end
 
+include("fitmp.jl")
+include("fitcournot.jl")
+include("fitcournottraj.jl")
 include("fit.depre.jl")

@@ -40,7 +40,7 @@ function plot_convergence(ε, s)
     pls = []
     for id in 1:s
         pl = plot(
-            size=(700 * (s), 900),
+            size=(1000 * (s), 900),
         )
         for (func, fname) in metrics
             vv = ε[id, fname]
