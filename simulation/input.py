@@ -108,14 +108,14 @@ def load_data(datadir="datasets"):
     min_pstart = df["pstart"].min()
     df_individual = df.assign(
         rel_pstart=lambda df: df["pstart"] - min_pstart,
-        rel_leaving=lambda df: df["probation_term"] * 30,
+        rel_probation=lambda df: df["probation_term"] * 30,
     )[
         [
             "observed",
             "time",
             "code_county",
             "rel_pstart",
-            "rel_leaving",
+            "rel_probation",
             "felony_arrest",
             "age_dist",
             "score_fixed",

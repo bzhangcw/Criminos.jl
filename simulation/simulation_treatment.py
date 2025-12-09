@@ -11,7 +11,7 @@ from scipy.optimize import curve_fit
 # treatment rules
 # ------------------------------------------------------------------------------
 def treatment_null(dfi, **kwargs):
-    dfi["treat"] = 0.0
+    dfi["bool_treat"] = 0.0
     dfi["score_with_treat"] = dfi["score"]
 
 
@@ -38,9 +38,9 @@ def treatment_rule_priority(
             .sort_values(key, ascending=ascending)
             .index[:remaining_capacity]
         )
-        dfi.loc[idx_selected, "treat"] = 1.0
+        dfi.loc[idx_selected, "bool_treat"] = 1.0
         dfi.loc[idx_selected, "score_with_treat"] = (
-            dfi.loc[idx_selected, "score"] - dfi.loc[idx_selected, "treat"] * 1.0
+            dfi.loc[idx_selected, "score"] - dfi.loc[idx_selected, "bool_treat"] * 1.0
         )
 
 
@@ -56,5 +56,5 @@ def treatment_rule_random(dfi, capacity=100, effect=0.05, **kwargs):
     ).astype(int)
     if remaining_capacity > 0:
         idx_selected = people_notreatment.sample(remaining_capacity).index
-        dfi.loc[idx_selected, "treat"] = 1.0
-        dfi["score_with_treat"] = dfi["score"] - dfi["treat"] * effect
+        dfi.loc[idx_selected, "bool_treat"] = 1.0
+        dfi["score_with_treat"] = dfi["score"] - dfi["bool_treat"] * effect

@@ -36,18 +36,19 @@ from tqdm.auto import tqdm as _tqdm
 class EventType(str, Enum):
     """Event types in the simulation."""
 
-    EVENT_ARR = "ar"
-    EVENT_LEAVE = "lv"
-    EVENT_RECID = "re"
-    EVENT_END_PROD = "ep"
+    EVENT_ARR = "arriv"
+    EVENT_LEAVE = "leave"
+    EVENT_RECID = "offnd"
+    EVENT_END_PROD = "endpr"
+    EVENT_RETURN = "retrn"
 
 
 MAX_ARRESTS = 15
 
 
 class ReasonToLeave(IntEnum):
-    END_OF_PROBATION = 1
-    TOO_MANY_ARRESTS = 2
+    END_OF_PROCESS = 1
+    RETURNING_AGENT = 2
 
 
 from simulation_extra import *
@@ -86,6 +87,10 @@ class Event(object):
         self.priority = encode_priority(self.time)
         self.idx_ref = idx_ref
         self.companion = companion
+        self.hashid = self.__hashid__()
+
+    def __hashid__(self):
+        return f"{self.time:.2f}_{self.idx}_{self.type}"
 
     def unpack(self):
         return self.priority, self.time, self.tau, self.idx, self.type
@@ -99,7 +104,7 @@ class Event(object):
 # ------------------------------------------------------------------------------
 class StateVal(object):
     def __init__(self, values):
-        self.value = tuple(values) if len(values) > 1 else values[0]
+        self.value = tuple(values) if len(values) > 1 else (values.values[0],)
 
     def __repr__(self):
         return str(self.value)
@@ -195,11 +200,12 @@ class Simulator(object):
         "bool_left",  # whether the individual has left (end of probation term)
         "type_left",  # the reason for leaving (end of probation term / too many arrests)
         "observed",  # whether the individual has been observed (ever arrested)
-        "treat",  # whether the individual has been treated
-        "treat_made",  # whether the treatment decision (either 0 or 1) has been made
+        "bool_treat",  # whether the individual has been treated
+        "bool_treat_made",  # whether the treatment decision (either 0 or 1) has been made
         "score_with_treat",  # score of the individual with treatment
         "ep_arrival",  # episode of arrival
         "ep_leaving",  # episode of leaving
+        "return_times",  # number of times the individual has returned to the community
     ]
 
     SCORING_COLUMNS = ["score_fixed", "score_comm"]
@@ -213,8 +219,8 @@ class Simulator(object):
         "ep_lastre",
         "felony_arrest_lst",
         "felony_arrest",
-        "treat",
-        "treat_made",
+        "bool_treat",
+        "bool_treat_made",
         "type_left",
     ]
 
@@ -223,6 +229,7 @@ class Simulator(object):
         eval_score_fixed,
         eval_score_comm,
         func_arrival=None,
+        func_end_probation=None,
         func_leaving=None,
         state_defs=StateDefs(["felony_arrest"]),
         bool_keep_full_trajectory=True,
@@ -231,6 +238,11 @@ class Simulator(object):
         self.eval_score_comm = eval_score_comm
 
         self.func_arrival = func_arrival
+        self.func_end_probation = (
+            func_end_probation
+            if func_end_probation is not None
+            else self.__default_end_probation
+        )
         self.func_leaving = (
             func_leaving if func_leaving is not None else self.__default_leaving
         )
@@ -241,12 +253,32 @@ class Simulator(object):
         print(self.state_defs.scoring_weights)
         self.bool_keep_full_trajectory = bool_keep_full_trajectory
 
-    def __default_leaving(self, row, t_now):
+    def __default_end_probation(self, row, t_now):
+        delta = row["rel_probation"]
         return Event(
-            t_now + row["rel_leaving"],
-            row["rel_leaving"],
+            t_now + delta,
+            delta,
+            row.name,
+            EventType.EVENT_END_PROD,
+            idx_ref=-1,
+        )
+
+    def __default_leaving(self, row, t_now):
+        delta = row["rel_probation"] + row["rel_off_probation"]
+        return Event(
+            t_now + delta,
+            delta,
             row.name,
             EventType.EVENT_LEAVE,
+            idx_ref=-1,
+        )
+
+    def __default_return(self, row, t_now):
+        return Event(
+            t_now + 0.0,
+            0.0,
+            row.name,
+            EventType.EVENT_RETURN,
             idx_ref=-1,
         )
 
@@ -294,6 +326,7 @@ class Simulator(object):
         T_max=1095,
         p_length=360,
         p_freeze=4,
+        rel_off_probation=500,
         # ----------------------------------------------------------------------
         func_treatment=None,
         func_treatment_kwargs={},
@@ -349,18 +382,24 @@ class Simulator(object):
         np.random.seed(seed)
         # create an empty priority queue
         self.event_queue = event_queue = queue.PriorityQueue()
+        self.events_cancelled = set()
         t = 0.0
         p = p_freeze
-        n_persons_appeared = dfi.index.max()
+        n_persons_appeared = dfi.shape[0]
         self.dfpop = dfpop
         # initialize the population
+        self.dfi = dfi
         dfi[self.INITIALIZED_COLUMNS] = 0.0
+        dfi["hash_leave"] = ""
         dfi["arrival"] = 0.0
+        dfi["rel_off_probation"] = rel_off_probation  # initial off-probation term
         dfi["ep_leaving"] = 1e6
+        dfi["ep_end_probation"] = 1e6
         dfi["age_start"] = dfi["age"].copy()
         dfi["age_dist_start"] = dfi["age_dist"].copy()
         dfi["prio_arrest"] = dfi["felony_arrest"].copy()
         dfi["state_lst"] = dfi["state"].apply(lambda x: StateVal(x.value))
+        dfi["bool_in_probation"] = 1
 
         # statistics
         self.num_y = num_y = defaultdict(int)
@@ -389,14 +428,22 @@ class Simulator(object):
 
         # assign initial treatment
         func_treatment(dfi, **func_treatment_kwargs)
+
         # --------------------------------------------------------------------------
-        # assign leaving events to existing individuals
-        #   push an recidivism event if it is before the leaving event
+        # assign end-probation & leaving events to existing individuals
         # --------------------------------------------------------------------------
         for idx, row in dfi.iterrows():
+            # end-probation event
+            _end_probation = self.func_end_probation(dfi.loc[idx], t)
+            event_queue.put((_end_probation.priority, _end_probation))
+            dfi.loc[idx, "end_probation"] = _end_probation.time
+            dfi.loc[idx, "ep_end_probation"] = 1e6
+            # leaving event
             _leave_event = self.func_leaving(row, t)
             dfi.loc[idx, "leaving"] = _leave_event.time
+            dfi.loc[idx, "ep_leaving"] = 1e6
             event_queue.put((_leave_event.priority, _leave_event))
+            dfi.loc[idx, "hash_leave"] = _leave_event.hashid
 
         # --------------------------------------------------------------------------
         # initialize a recidivism event if it is before the leaving event
@@ -418,8 +465,11 @@ class Simulator(object):
                 n_persons_appeared + 1,  # index of the new person
                 _row.name,  # the idx/name of the row in the sampling distribution (df)
             )
-            event_queue.put((_arrival.priority, _arrival))
-            opt_verbosity >= 2 and print(self.log_event(_arrival, gen=True), file=fo)
+            if _arrival is not None:
+                event_queue.put((_arrival.priority, _arrival))
+                opt_verbosity >= 2 and print(
+                    self.log_event(_arrival, gen=True), file=fo
+                )
 
         # ------------------------------------------------------------
         # simulation start
@@ -443,19 +493,20 @@ class Simulator(object):
             # pop and process the newest event (highest time)
             _, event = event_queue.get()
             _, _ac, tau, idx, info = event.unpack()
-            if np.isnan(tau):
+            if np.isnan(tau) or event.hashid in self.events_cancelled:
                 continue
             opt_verbosity >= 2 and print(self.log_event(event), file=fo)
             t = _ac
             _inc = max(0.0, min(T_max, t) - _pbar.n)
             _pbar.update(int(_inc))
             _episode = np.floor(t / p_length).astype(int)
-            _bool_is_leaving = False
+            _bool_skip_next_offense = False
 
-            if info == EventType.EVENT_ARR:
+            if info in (EventType.EVENT_ARR, EventType.EVENT_RETURN):
                 # new arrival and add to the population
-                n_persons_appeared += 1
-                dfi.loc[idx] = dfpop.loc[event.idx_ref]
+                if info == EventType.EVENT_ARR:
+                    n_persons_appeared += 1
+                    dfi.loc[idx] = dfpop.loc[event.idx_ref]
                 dfi.loc[idx, self.INITIALIZED_COLUMNS] = 0
                 dfi.loc[idx, "arrival"] = t
                 dfi.loc[idx, "ep_arrival"] = _episode
@@ -467,11 +518,27 @@ class Simulator(object):
                 dfi.loc[idx, "score_state"] = self.state_defs.get_score(dfi.loc[idx])
                 dfi.loc[idx, "score_comm"] = dfc_dict.get(dfi.loc[idx, "code_county"])
                 dfi.loc[idx, "score"] = self.produce_score(idx, dfi)
-                dfi.loc[idx, "rel_leaving"] *= np.random.uniform(0.7, 1.3)
+                # add a perturbation to the leaving time
+                dfi.loc[idx, "bool_in_probation"] = 1
+                dfi.loc[idx, "rel_probation"] *= np.random.uniform(0.7, 1.3)
+                dfi.loc[idx, "rel_off_probation"] = rel_off_probation
 
                 # not assigned to any treatment yet
                 dfi.loc[idx, "score_with_treat"] = dfi.loc[idx, "score"]
+
+                # ------------------------------------------------------------
+                # produce the end-probation event
+                # ------------------------------------------------------------
+                _end_probation = self.func_end_probation(dfi.loc[idx], t)
+                opt_verbosity >= 2 and print(
+                    self.log_event(_end_probation, gen=True), file=fo
+                )
+                event_queue.put((_end_probation.priority, _end_probation))
+                dfi.loc[idx, "end_probation"] = _end_probation.time
+                dfi.loc[idx, "ep_end_probation"] = 1e6
+                # ------------------------------------------------------------
                 # produce the leaving event
+                # ------------------------------------------------------------
                 _leaving = self.func_leaving(dfi.loc[idx], t)
                 opt_verbosity >= 2 and print(
                     self.log_event(_leaving, gen=True), file=fo
@@ -479,6 +546,7 @@ class Simulator(object):
                 event_queue.put((_leaving.priority, _leaving))
                 dfi.loc[idx, "leaving"] = _leaving.time
                 dfi.loc[idx, "ep_leaving"] = 1e6
+                dfi.loc[idx, "hash_leave"] = _leaving.hashid
 
                 # generate next arrival individual
                 _new_row = dfpop.sample(1).iloc[0]
@@ -488,18 +556,24 @@ class Simulator(object):
                     n_persons_appeared + 1,
                     _new_row.name,
                 )
-                opt_verbosity >= 2 and print(
-                    self.log_event(_arrival, gen=True), file=fo
-                )
-                event_queue.put((_arrival.priority, _arrival))
+                if _arrival is not None:
+                    opt_verbosity >= 2 and print(
+                        self.log_event(_arrival, gen=True), file=fo
+                    )
+                    event_queue.put((_arrival.priority, _arrival))
 
-                num_lbd[_row["code_county"], dfi.loc[idx, "state"], _episode] += 1
+                    num_lbd[_row["code_county"], dfi.loc[idx, "state"], _episode] += 1
+
+            elif info == EventType.EVENT_END_PROD:
+                # process leaving events
+                dfi.loc[idx, "ep_end_probation"] = _episode
+                dfi.loc[idx, "bool_in_probation"] = 0
 
             elif info == EventType.EVENT_LEAVE:
                 # process leaving events
-                dfi.loc[idx, "bool_left"] = _bool_is_leaving = 1
+                dfi.loc[idx, "bool_left"] = _bool_skip_next_offense = 1
                 dfi.loc[idx, "ep_leaving"] = _episode
-                dfi.loc[idx, "type_left"] = ReasonToLeave.END_OF_PROBATION
+                dfi.loc[idx, "type_left"] = ReasonToLeave.END_OF_PROCESS
 
                 num_lft[_row["code_county"], _row["state"], _episode] += 1
 
@@ -517,16 +591,25 @@ class Simulator(object):
                 # per-episode number of arrests
                 num_y[_row["code_county"], _row["state"], _episode] += 1
 
-                # if new number of arrests is greater than MAX_ARRESTS,
-                #   then this one fails the probation term
+                # ------------------------------------------------------------------------------
+                # an off-probation offense?
+                # ------------------------------------------------------------------------------
+                # if offend not in the probation term, then the individual is leaving
+                #   and is returning to the community
                 dfi.loc[idx, "felony_arrest"] = dfi.loc[idx, "felony_arrest"] + 1
-                if (
-                    dfi.loc[idx, "felony_arrest"] - dfi.loc[idx, "prio_arrest"]
-                    > MAX_ARRESTS
-                ):
-                    dfi.loc[idx, "bool_left"] = _bool_is_leaving = 1
-                    dfi.loc[idx, "ep_leaving"] = _episode
-                    dfi.loc[idx, "type_left"] = ReasonToLeave.TOO_MANY_ARRESTS
+                if dfi.loc[idx, "bool_in_probation"] == 0:
+                    # this person is returning to the community (again)
+                    dfi.loc[idx, "return_times"] = dfi.loc[idx, "return_times"] + 1
+                    dfi.loc[idx, "bool_in_probation"] = 1
+                    _return = self.__default_return(dfi.loc[idx], t)
+                    opt_verbosity >= 2 and print(
+                        self.log_event(_return, gen=True), file=fo
+                    )
+                    event_queue.put((_return.priority, _return))
+                    # cancel prescheduled leaving event
+                    self.events_cancelled.add(dfi.loc[idx, "hash_leave"])
+                    _bool_skip_next_offense = True
+
             else:
                 raise ValueError(f"Unknown event type: {info}")
 
@@ -546,9 +629,8 @@ class Simulator(object):
                     # this means the fraction of people who have been arrested at least once
                     # during the probation period
                     # @note: old method, not so accurate?
-                    #   dfc.loc[_cid, "percent_re"] = num_n_mu[_cid, _episode] = num_n_y[
-                    #     _cid
-                    #   ] / (num_n_x[_cid] * _episode)
+                    #   dfc.loc[_cid, "percent_re"]
+                    #       = num_n_mu[_cid, _episode] = num_n_y[_cid] / (num_n_x[_cid] * _episode)
                     # @note: new method
                     #   compute the rate of re-arrested people
                     #   ever appeared in the county
@@ -604,7 +686,7 @@ class Simulator(object):
 
                 # apply treatment rule
                 func_treatment(dfi, **func_treatment_kwargs)
-                dfi["treat_made"] = 1
+                dfi["bool_treat_made"] = 1
 
                 # keep trajectory
                 dfc_sorted = dfc.assign(snap=p).reset_index()
@@ -618,11 +700,15 @@ class Simulator(object):
             # ------------------------------------------------------------
             # sample next survival time
             # ------------------------------------------------------------
-            if _bool_is_leaving:
+            if _bool_skip_next_offense:
                 # does not seem necessary to drop the individual
                 # dfi.drop(index=idx, inplace=True)
                 pass
-            else:
+            elif info in (
+                EventType.EVENT_RECID,
+                EventType.EVENT_ARR,
+                EventType.EVENT_RETURN,
+            ):
                 _new_event = self.get_new_recid_event(
                     dfi.loc[idx], t_now=t, opt_verbosity=opt_verbosity, fo=fo
                 )
@@ -734,7 +820,7 @@ class Simulator(object):
                 .groupby(grp_keys_lst)["index"]
                 .count()
             )
-            tau = df_presence_begin.groupby(grp_keys_lst)["treat"].sum()
+            tau = df_presence_begin.groupby(grp_keys_lst)["bool_treat"].sum()
             df_traj = (
                 pd.DataFrame(
                     {
@@ -1152,6 +1238,10 @@ def arrival_exp(beta_arrival, row, t_now, idx, idx_ref):
     _tau = np.random.exponential(beta_arrival)
     e = Event(t_now + _tau, _tau, idx, EventType.EVENT_ARR, idx_ref=idx_ref)
     return e
+
+
+def arrival_no_arrival(row, t_now, idx, idx_ref):
+    return None
 
 
 def leaving_exp(beta_leave, row, t_now, idx):
