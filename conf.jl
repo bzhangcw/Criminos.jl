@@ -10,7 +10,7 @@ alias = haskey(ENV, "CRIMINOS_ALIAS") ? ENV["CRIMINOS_ALIAS"] : nothing
 current_date = Dates.format(now(), "yyyymmdd/HHMMSS")
 # Create the folder
 folder_name = current_date
-result_dir = isnothing(alias) ? "result-$folder_name" : "result-$(folder_name[1:8])/$alias"
+result_dir = isnothing(alias) ? "result/result-$folder_name" : "result/result-$(folder_name[1:8])/$alias"
 mkpath(result_dir)
 
 println(repeat("-", 80))

@@ -62,7 +62,7 @@ function mixed_in_gnep_best!(
         # --------------------------------------------------
         # set_upper_bound.(_y, _x .* ι[id])
         set_upper_bound.(_y, _x)
-        _φ += _x' * _Ψ.Γₕ * _y + dist(_y, z.y) / baropt.μ
+        _φ += (_x + _Ψ.λ)' * _Ψ.Γₕ * _y + dist(_y, z.y) / baropt.μ
     end
     # repeat the blocks
     _τ = vcat([z.τ .* z.β for z in vector_ms]...)

@@ -75,22 +75,17 @@ function decision_priority_by_τ!(
     args=nothing,
     kwargs...
 ) where {R,Tx,Tm}
-    mipar, decision_option, cₜ, aₜ, δ, lb, ub, τₛ, _unused_args... = args
+    decision_option, cₜ, C, lb, ub, _unused_args... = args
     _n = vector_ms[1].n
     _N = _n * length(vector_ms)
     model = decision_option.model
     if decision_option.is_setup == false
         @variable(model, τ[1:_N] .>= 0)
         @variable(model, r[1:_N])
-        @variable(model, h[1:_N, 1:3] .>= 0)
         decision_option.is_setup = true
         decision_option.τ = τ
-        decision_option.h = h
         decision_option.τcon = []
-        # @constraint(model, sum(h, dims=2) .== 1)
-        # for j in 1:_N
-        #     @constraint(model, τ[j] - h[j, :]' * aₜ .== 0)
-        # end
+
         if decision_option.is_conic
             # -log.(τ + 1) <= r => [τ + 1, 1, -r] in EC
             for j in 1:_N
@@ -114,13 +109,13 @@ function decision_priority_by_τ!(
         _x = z.x₋
         _y = z.y
         _τ = τ[(id-1)*_n+1:id*_n]
-        _h = h[(id-1)*_n+1:id*_n]
         _r = r[(id-1)*_n+1:id*_n]
 
+        _treat = _τ .* _x
         push!(
             decision_option.τcon,
             # Equal Opportunity
-            @constraint(model, _y' * _τ <= δ)
+            @constraint(model, sum(_treat) <= C)
             # Equal Probability
             # @constraint(model, δ * sum(_x) - _τ' * _y .>= 0)
         )
@@ -128,7 +123,7 @@ function decision_priority_by_τ!(
         if decision_option.is_conic
             _φ += cₜ' * _r
         else
-            _φ += cₜ' * (_τ ./ τₛ)
+            _φ += cₜ' * _treat
         end
     end
     @objective(model, Min, _φ)
@@ -143,10 +138,7 @@ function decision_priority_by_τ!(
     end
     for (id, z) in enumerate(vector_ms)
         _τ = τ[(id-1)*_n+1:id*_n]
-        _h = h[(id-1)*_n+1:id*_n]
         z.τ = value.(_τ)
-        z.I = value.(_h)
-        z.fpr = fp(z.I, z)
     end
 end
 

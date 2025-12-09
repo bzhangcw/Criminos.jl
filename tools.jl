@@ -1,5 +1,5 @@
 using LinearAlgebra, SparseArrays, Arpack
-using Plots
+using Plots, JSON
 
 switch_to_pdf = () -> begin
     pgfplotsx()
@@ -161,6 +161,9 @@ end
 
 # some empirical distribution tools
 unimodal(n) = [sqrt(exp(-abs(j - n / 3.7))) for j in 1:n]
+fillna(x) = isnan(x) ? 0.0 : x
+parseint(i_str) = isa(i_str, Int) ? i_str : parse(Int, i_str)
+
 
 Base.@kwdef mutable struct AgentData{Tv,Tx}
     n::Int
@@ -174,14 +177,32 @@ Base.@kwdef mutable struct AgentData{Tv,Tx}
     traj_y_lb::Tx
     traj_y_ub::Tx
 
-    AgentData(yaml, Tₘ; n=nothing) = (
+    AgentData(file, Tₘ; n=10, bool_use_yaml=false) = (
         this = new{Vector{Float64},Matrix{Float64}}();
         this.Tₘ = Tₘ;
-        _construct_callback(this; yaml=yaml, n=n)
+        if bool_use_yaml
+            _construct_callback(this, file; n=n)
+        else
+            _construct_callback_json(this, file; n=n)
+        end
     )
+    AgentData(n, Tₘ, traj_x, traj_y) = begin
+        this = new{Vector{Float64},Matrix{Float64}}()
+        this.n = n
+        this.Tₘ = Tₘ
+        this.traj_x = traj_x
+        @info "" "size of trajectory = (n, Tₘ) = $(size(traj_x))"
+        this.traj_y = traj_y
+        this.γ = zeros(n)
+        this.λ = zeros(n)
+        this.traj_x_lb = similar(traj_x)
+        this.traj_x_ub = similar(traj_x)
+        this.traj_y_lb = similar(traj_y)
+        this.traj_y_ub = similar(traj_y)
+        return this
+    end
 end
-fillna(x) = isnan(x) ? 0.0 : x
-function _construct_callback(this; yaml=yaml, n=nothing)
+function _construct_callback(this, file; n=nothing)
     # maximum number of slots used in the estimation
     Tₘ = this.Tₘ
     if n === nothing
@@ -223,7 +244,100 @@ function _construct_callback(this; yaml=yaml, n=nothing)
     return this
 end
 
-function plot_fitting_results(data, r; bool_pdf=false)
+function _construct_callback_json(this, file; n=10)
+    throw(ArgumentError("not implemented"))
+end
+
+function _read_json(file; max_n=10)
+    # load data
+    data = JSON.parsefile(file)
+    T = length(data)
+
+    # discover neighborhoods & attrs
+    nbs, attrs = Set{String}(), Set{String}()
+    for entry in data, (nb, ad) in entry
+        push!(nbs, nb)
+        for attr in keys(ad)
+            push!(attrs, attr)
+        end
+    end
+
+    # preallocate capped storage
+    A = Dict{String,Dict{String,Array{Float64,2}}}()
+    Y = Dict{String,Array{Float64,3}}()
+    for nb in nbs
+        A[nb] = Dict(attr => zeros(T, max_n) for attr in attrs if attr != "y")
+        Y[nb] = zeros(T, max_n, max_n)
+    end
+
+    # fill with clamping at max_n
+    for (t, entry) in enumerate(data)
+        for (nb, ad) in entry
+            for (attr, val) in ad
+                if attr == "y"
+                    for tri in val
+                        i, j, v = parseint(tri[1]), parseint(tri[2]), tri[3]
+                        ii = min(i + 1, max_n)
+                        jj = min(j + 1, max_n)
+                        Y[nb][t, ii, jj] += v
+                    end
+                else
+                    for (i_str, v) in val
+                        i = parseint(i_str)
+                        ii = min(i + 1, max_n)
+                        A[nb][attr][t, ii] += v
+                    end
+                end
+            end
+        end
+    end
+    return A, Y
+end
+
+function _solve_for_gamma(A, Y, nb; optimizer=nothing, epsilon=0.01)
+
+    mean_xe = mean(A[nb]["x0"]; dims=1)[:]
+    mean_xa = mean(A[nb]["x"]; dims=1)[:]
+    mean_yout = mean(A[nb]["yout"]; dims=1)[:]
+    mean_yin = mean(A[nb]["yin"]; dims=1)[:]
+    mean_lv = mean(A[nb]["lv"]; dims=1)[:]
+    mean_y = mean(Y[nb]; dims=1)[1, :, :]
+    mean_λ = mean(A[nb]["lmd"]; dims=1)[:]
+    # model
+    md = Model(optimizer)
+    γ = @variable(md, γ[1:n], lower_bound = 0.0, upper_bound = 0.99)
+    ϵ = @variable(md, ϵ, lower_bound = 0.0, upper_bound = epsilon)
+    for i in 1:n
+        expr = mean_xa[i] - γ[i] * (mean_xe[i] - mean_yout[i] + mean_λ[i] + mean_yin[i])
+        @constraint(md, expr ≤ ϵ)
+        @constraint(md, expr ≥ -ϵ)
+    end
+    @objective(md, Min, sum(γ))
+    optimize!(md)
+    γv = value.(γ)
+    γv .= (γv .== 0.0) * 0.5 + γv
+    return γv
+end
+
+function _solve_for_gamma(mean_xe, mean_xa, mean_yout, mean_yin, mean_λ; optimizer=nothing, epsilon=0.01)
+
+    # model
+    md = Model(optimizer)
+    γ = @variable(md, γ[1:n], lower_bound = 0.0, upper_bound = 0.99)
+    ϵ = @variable(md, ϵ, lower_bound = 0.0, upper_bound = epsilon)
+    for i in 1:n
+        expr = mean_xa[i] - γ[i] * (mean_xe[i] - mean_yout[i] + mean_λ[i] + mean_yin[i])
+        @constraint(md, expr ≤ ϵ)
+        @constraint(md, expr ≥ -ϵ)
+    end
+    @objective(md, Min, sum(γ))
+    optimize!(md)
+    γv = value.(γ)
+    γv .= (γv .== 0.0) * 0.5 + γv
+    return γv
+end
+
+function plot_fitting_results(data, r; affix="null", bool_pdf=false, bool_traj=false)
     yₛ = data.traj_y[:, end]
     xₛ = data.traj_x[:, end]
 
@@ -329,125 +443,60 @@ function plot_fitting_results(data, r; bool_pdf=false)
         linewidth=3,
         color=series_color[2]
     )
+    if bool_traj
+        ff = plot(fig, fig1, fig2, fig3)
+    else
+        ff = plot(fig, fig1)
+    end
+    savefig(ff, "$(cc.result_dir)/fitting-results-$(affix).$format")
+
     return fig, fig1, fig2, fig3
 end
 
-# switch_to_pdf()
-# pgfplotsx()
-# series_color = palette(:default)
-# fig = generate_empty(false; title="")
-# plot!(
-#     1:n, yₛ,
-#     labels=L"y_T^\texttt{a}",
-#     linestyle=:dot,
-#     color=series_color[1],
-#     linewidth=3,
-#     labelfontsize=24,
-#     xtickfont=font(20),
-#     ytickfont=font(20),
-#     legendfontsize=24,
-# )
-# plot!(
-#     1:n, traj_y_lb[:, end], fillrange=traj_y_ub[:, end],
-#     labels=L"$y_T^\texttt{a}$ (CI)",
-#     fillalpha=0.3,
-#     linestyle=:dot,
-#     color=series_color[1],
-# )
 
-# plot!(
-#     1:n, r.y,
-#     label=L"$y_T$",
-#     linewidth=3,
-#     color=series_color[2]
-# )
-# fig1 = generate_empty(false)
-# plot!(
-#     1:n, xₛ,
-#     labels=L"x_T^\texttt{a}",
-#     linestyle=:dot,
-#     color=series_color[1],
-#     linewidth=3,
-#     labelfontsize=24,
-#     xtickfont=font(20),
-#     ytickfont=font(20),
-#     legendfontsize=24,
-# )
-# plot!(
-#     1:n, traj_x_lb[:, end], fillrange=traj_x_ub[:, end],
-#     labels=L"$x_T^\texttt{a}$ (CI)",
-#     fillalpha=0.3,
-#     linestyle=:dot,
-#     color=series_color[1],
-# )
+function rate_visualization(rate_vec, V)
+    K = length(V[1])
+    colnames = Symbol[]
+    coldata = Any[]
+    if K >= 1
+        push!(colnames, :j)
+        push!(coldata, [v[1] for v in V])
+    end
+    if K >= 2
+        push!(colnames, :a)
+        push!(coldata, [v[2] for v in V])
+    end
+    for k in 3:K
+        push!(colnames, Symbol("d$(k)"))
+        push!(coldata, [v[k] for v in V])
+    end
+    push!(colnames, :rate)
+    push!(coldata, rate_vec)
 
-# plot!(
-#     1:n, r.x,
-#     label=L"$x_T$",
-#     linewidth=3,
-#     color=series_color[2]
-# )
+    df_rate_long = DataFrame(coldata, colnames)
 
-# # total number
-# fig2 = generate_empty(false)
+    if K >= 2
+        df_rate = unstack(df_rate_long, :a, :j, :rate)
+    end
+    return df_rate
+end
 
-# ysum = [sum(j[1].y) for j in traj]
-# L = min(length(ysum), 100)
-# plot!(
-#     sum(traj_y; dims=1)[:][1:L],
-#     labels=L"\sum y_{t}^\texttt{a}",
-#     linestyle=:dot,
-#     color=series_color[1],
-#     linewidth=3,
-#     xlabel=L"t",
-#     labelfontsize=24,
-#     xtickfont=font(20),
-#     ytickfont=font(20),
-#     legendfontsize=22,
-#     yscale=:log10
-# )
-# plot!(
-#     sum(traj_y_lb; dims=1)[:][1:L], fillrange=sum(traj_y_ub; dims=1)[:][1:L],
-#     labels=L"$\sum y_{t}^\texttt{a}$ (CI)",
-#     fillalpha=0.3,
-#     linestyle=:dot,
-#     color=series_color[1],
-# )
+function safe_ratio(y, x; ϵ=1e-4)
+    return ifelse(abs(x) <= ϵ, 0.0, y / x)
+end
 
-# plot!(
-#     ysum[1:L],
-#     label=L"$\sum y_{t}$",
-#     linewidth=3,
-#     color=series_color[2]
-# )
-# fig3 = generate_empty(false)
+function visualize_results(z, τ, data)
+    n = data[:n]
+    x0 = z.x[:, 1] + z.x[:, 2]
+    y0 = z.y[:, 1] + z.y[:, 2]
+    x1 = z.x[:, 3] + z.x[:, 4]
+    y1 = z.y[:, 3] + z.y[:, 4]
+    Z = [data[:V] x0 x1 y0 y1 round.(τ, digits=4) data[:scores_level]]
+    df = DataFrame(Z, [:v, :x₀, :x₁, :y₀, :y₁, :τ, :score])
+    df[!, :x] = df[!, :x₀] + df[!, :x₁]
+    df[!, :y] = df[!, :y₀] + df[!, :y₁]
+    return df
+end
 
-# xsum = [sum(j[1].x) for j in traj]
-# L = length(ysum)
-# plot!(
-#     sum(traj_x; dims=1)[:][1:L],
-#     labels=L"\sum x_{t}^\texttt{a}",
-#     linestyle=:dot,
-#     color=series_color[1],
-#     linewidth=3,
-#     xlabel=L"t",
-#     labelfontsize=24,
-#     xtickfont=font(20),
-#     ytickfont=font(20),
-#     legendfontsize=22,
-#     yscale=:log10
-# )
-# plot!(
-#     sum(traj_x_lb; dims=1)[:][1:L], fillrange=sum(traj_x_ub; dims=1)[:][1:L],
-#     labels=L"$\sum x_{t}^\texttt{a}$ (CI)",
-#     fillalpha=0.3,
-#     linestyle=:dot,
-#     color=series_color[1],
-# )
-
-# plot!(
-#     xsum[1:L],
-#     label=L"$\sum x_{t}$",
-#     linewidth=3,
-#     color=series_color[2]
-# )
+sum_dict(d) = sum(values(d))
+sum_all(d) = sum(sum_dict(d))
