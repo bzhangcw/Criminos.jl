@@ -53,8 +53,12 @@ cols_fill_1 = [
 ]
 
 
-def load_data(datadir="datasets"):
-    dfr = pd.read_excel("./felony-1989-final.xlsx", engine="openpyxl", index_col="id")
+def load_data(datadir="./"):
+    ff = pd.ExcelFile(f"{datadir}/felony-1989-final.xlsx", engine="openpyxl")
+    dfr = ff.parse("main", index_col="id")
+    dfr_at = ff.parse("artificial", index_col="id")
+
+    dfr = pd.merge(dfr, dfr_at, how="left", on="id")
 
     dfr = dfr.assign(
         na_t_recid=lambda df: df["t_recid"].isna(),
@@ -120,6 +124,7 @@ def load_data(datadir="datasets"):
             "age_dist",
             "score_fixed",
             "score_age_dist",
+            "prison_rate",
         ]
     ].assign(
         score_comm=lambda x: x["code_county"].map(dfc_dict),

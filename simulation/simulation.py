@@ -41,14 +41,34 @@ class EventType(str, Enum):
     EVENT_RECID = "offnd"
     EVENT_END_PROD = "endpr"
     EVENT_RETURN = "retrn"
+    EVENT_INCARCERATION = "incar"
+    EVENT_ADMIT = "admit"
+    EVENT_REVOKE = "revok"
 
 
-MAX_ARRESTS = 15
+DEFAULT_MAX_RETURNS = 3
+# @note: by c.z (2025-12-10)
+# qualifying for treatment:
+#   - the individual has not left yet
+#   - the individual is in probation
+DEFAULT_QUALIFYING_FOR_TREATMENT = (
+    "bool_left == 0 "
+    + " & bool_in_probation == 1"
+    + " & bool_can_be_treated == 1"
+    + " & has_been_treated == 0"
+)
+DEFAULT_STR_CURRENT_ENROLL = "bool_left == 0 & bool_treat == 1 & bool_in_probation == 1"
+DEFAULT_BOOL_RETURN_CAN_BE_TREATED = (
+    1  # if you are a returning agent, you can be treated
+)
+DEFAULT_BOOL_KEEP_TREATMENT_EFFECT = True
 
 
 class ReasonToLeave(IntEnum):
     END_OF_PROCESS = 1
     RETURNING_AGENT = 2
+    INCARCERATION = 3
+    TOO_MANY_RETURNS = 4
 
 
 from simulation_extra import *
@@ -57,6 +77,7 @@ from simulation_treatment import (
     treatment_rule_priority,
     treatment_rule_random,
 )
+from simulation_stats import summarize_trajectory, evaluation_metrics
 
 
 def encode_priority(t):
@@ -146,6 +167,7 @@ STATE_KEY_RANGE = {
     "felony_arrest": list(range(11)),
     "age": list(range(18, 55)),
     "age_dist": [1, 2, 3, 4, 5, 6],  # ignore 0
+    "bool_in_probation": [0, 1],
 }
 
 
@@ -169,15 +191,31 @@ class StateDefs(object):
     def get_score(self, row):
 
         return sum(
-            row[f"score_{key}"] * self.scoring_weights[f"score_{key}"]
+            (
+                row[f"score_{key}"] * self.scoring_weights[f"score_{key}"]
+                if f"score_{key}" in self.scoring_weights
+                else 0.0
+            )
             for key in self.state_keys
         )
 
     def update_state(self, dfi, idx, t):
         # ------------------------------------------------------------
-        # update the individual score and state
+        # update the individual covariates and scores, and finally the state and score_state
         # ------------------------------------------------------------
         # update the age, age_dist, and score_age_dist according to the new age
+        self.update_covariates(dfi, idx, t)
+        # update the state and score_state
+        dfi.loc[idx, "state"] = self.get_state(dfi.loc[idx])
+        dfi.loc[idx, "score_state"] = self.get_score(dfi.loc[idx])
+
+    def update_covariates(self, dfi, idx, t):
+        """
+        Update the covariates and the corresponding scores of the individual.
+        This includes:
+        1. age, age_dist, and score_age_dist.
+        2. felony_arrest, and score_felony_arrest.
+        """
         dfi.loc[idx, "age"] = (
             dfi.loc[idx, "age_start"] + (t - dfi.loc[idx, "arrival"]) / 365.0
         )
@@ -187,9 +225,6 @@ class StateDefs(object):
         )
         # the score of felony_arrest is just itself
         dfi.loc[idx, "score_felony_arrest"] = dfi.loc[idx, "felony_arrest"]
-        # update the state and score_state
-        dfi.loc[idx, "state"] = self.get_state(dfi.loc[idx])
-        dfi.loc[idx, "score_state"] = self.get_score(dfi.loc[idx])
 
 
 class Simulator(object):
@@ -202,10 +237,22 @@ class Simulator(object):
         "observed",  # whether the individual has been observed (ever arrested)
         "bool_treat",  # whether the individual has been treated
         "bool_treat_made",  # whether the treatment decision (either 0 or 1) has been made
+        "treat_start",  # the time when the treatment started
+        "treat_end",  # the time when the treatment ended
+        "has_been_treated",  # whether the individual has been treated
+        "num_treated",  # number of times the individual has been treated (double-checking)
         "score_with_treat",  # score of the individual with treatment
         "ep_arrival",  # episode of arrival
         "ep_leaving",  # episode of leaving
         "return_times",  # number of times the individual has returned to the community
+    ]
+    NOT_INITIALIZED_COLUMNS_WHEN_RETURNING = [
+        "bool_treat",  # whether the individual has been treated
+        "bool_treat_made",  # whether the treatment decision (either 0 or 1) has been made
+        "treat_start",  # the time when the treatment started
+        "treat_end",  # the time when the treatment ended
+        "has_been_treated",  # whether the individual has been treated
+        "score_with_treat",  # score of the individual with treatment
     ]
 
     SCORING_COLUMNS = ["score_fixed", "score_comm"]
@@ -260,6 +307,15 @@ class Simulator(object):
             delta,
             row.name,
             EventType.EVENT_END_PROD,
+            idx_ref=-1,
+        )
+
+    def __default_incarceration(self, row, t_now):
+        return Event(
+            t_now + 0.0,
+            0.0,
+            row.name,
+            EventType.EVENT_INCARCERATION,
             idx_ref=-1,
         )
 
@@ -330,6 +386,10 @@ class Simulator(object):
         # ----------------------------------------------------------------------
         func_treatment=None,
         func_treatment_kwargs={},
+        # ----------------------------------------------------------------------
+        str_qualifying_for_treatment=DEFAULT_QUALIFYING_FOR_TREATMENT,
+        str_current_enroll=DEFAULT_STR_CURRENT_ENROLL,
+        bool_return_can_be_treated=DEFAULT_BOOL_RETURN_CAN_BE_TREATED,
     ):
         """
         Run the simulation for a given population.
@@ -382,10 +442,12 @@ class Simulator(object):
         np.random.seed(seed)
         # create an empty priority queue
         self.event_queue = event_queue = queue.PriorityQueue()
-        self.events_cancelled = set()
+        self.events_cancelled = dict()
         t = 0.0
         p = p_freeze
         n_persons_appeared = dfi.shape[0]
+        self.n_persons_initial = n_persons_appeared
+        self.person_id_max = person_id_max = dfi.index.max()
         self.dfpop = dfpop
         # initialize the population
         self.dfi = dfi
@@ -400,6 +462,7 @@ class Simulator(object):
         dfi["prio_arrest"] = dfi["felony_arrest"].copy()
         dfi["state_lst"] = dfi["state"].apply(lambda x: StateVal(x.value))
         dfi["bool_in_probation"] = 1
+        dfi["bool_can_be_treated"] = 1
 
         # statistics
         self.num_y = num_y = defaultdict(int)
@@ -412,6 +475,7 @@ class Simulator(object):
         self.num_n_time = num_n_time = defaultdict(float)
         self.num_n_mu = num_n_mu = defaultdict(float)
         self.num_n_mean_arrest = num_n_mean_arrest = defaultdict(float)
+        self.num_n_enrollment = num_n_enrollment = dict()
 
         self.t_dfc = t_dfc = []
         self.t_dfi = t_dfi = []
@@ -426,9 +490,16 @@ class Simulator(object):
         opt_verbosity >= 1 and print("event:happ/  ready to go@", file=fo)
         print(self.log_header(), file=fo, flush=True)
 
+        # --------------------------------------------------------------------------
         # assign initial treatment
-        func_treatment(dfi, **func_treatment_kwargs)
-
+        # @note: c.z (2025-12-11)
+        # do not assign treatment initially
+        # idx_selected = func_treatment(
+        #     dfi,
+        #     **func_treatment_kwargs,
+        #     str_qualifying=str_qualifying_for_treatment,
+        #     str_current_enroll=str_current_enroll,
+        # )
         # --------------------------------------------------------------------------
         # assign end-probation & leaving events to existing individuals
         # --------------------------------------------------------------------------
@@ -438,12 +509,17 @@ class Simulator(object):
             event_queue.put((_end_probation.priority, _end_probation))
             dfi.loc[idx, "end_probation"] = _end_probation.time
             dfi.loc[idx, "ep_end_probation"] = 1e6
+            dfi.loc[idx, "hash_end_probation"] = _end_probation.hashid
+            opt_verbosity >= 2 and print(self.log_event(_end_probation), file=fo)
+
+        for idx, row in dfi.iterrows():
             # leaving event
             _leave_event = self.func_leaving(row, t)
             dfi.loc[idx, "leaving"] = _leave_event.time
             dfi.loc[idx, "ep_leaving"] = 1e6
-            event_queue.put((_leave_event.priority, _leave_event))
             dfi.loc[idx, "hash_leave"] = _leave_event.hashid
+            event_queue.put((_leave_event.priority, _leave_event))
+            opt_verbosity >= 2 and print(self.log_event(_leave_event), file=fo)
 
         # --------------------------------------------------------------------------
         # initialize a recidivism event if it is before the leaving event
@@ -454,6 +530,7 @@ class Simulator(object):
             )
             if _recid_event is not None:
                 event_queue.put((_recid_event.priority, _recid_event))
+                opt_verbosity >= 2 and print(self.log_event(_recid_event), file=fo)
 
         # push one arrival event
         if self.func_arrival is not None:
@@ -462,7 +539,7 @@ class Simulator(object):
             _arrival = self.func_arrival(
                 _row,
                 t,
-                n_persons_appeared + 1,  # index of the new person
+                person_id_max + 1,  # index of the new person
                 _row.name,  # the idx/name of the row in the sampling distribution (df)
             )
             if _arrival is not None:
@@ -493,7 +570,11 @@ class Simulator(object):
             # pop and process the newest event (highest time)
             _, event = event_queue.get()
             _, _ac, tau, idx, info = event.unpack()
-            if np.isnan(tau) or event.hashid in self.events_cancelled:
+            _cancel_by_who = self.events_cancelled.get(event.hashid)
+            if np.isnan(tau) or _cancel_by_who is not None:
+                opt_verbosity >= 2 and print(
+                    self.log_event(event, cancel=_cancel_by_who), file=fo
+                )
                 continue
             opt_verbosity >= 2 and print(self.log_event(event), file=fo)
             t = _ac
@@ -506,22 +587,30 @@ class Simulator(object):
                 # new arrival and add to the population
                 if info == EventType.EVENT_ARR:
                     n_persons_appeared += 1
+                    person_id_max += 1
                     dfi.loc[idx] = dfpop.loc[event.idx_ref]
-                dfi.loc[idx, self.INITIALIZED_COLUMNS] = 0
+                    dfi.loc[idx, "bool_can_be_treated"] = 1
+                    dfi.loc[idx, self.INITIALIZED_COLUMNS] = 0
+                else:
+                    # return can be treated?
+                    dfi.loc[idx, "bool_can_be_treated"] = bool_return_can_be_treated
+
                 dfi.loc[idx, "arrival"] = t
                 dfi.loc[idx, "ep_arrival"] = _episode
                 dfi.loc[idx, "age_start"] = dfi.loc[idx, "age"]
                 dfi.loc[idx, "age_dist_start"] = dfi.loc[idx, "age_dist"]
                 dfi.loc[idx, "prio_arrest"] = dfi.loc[idx, "felony_arrest"]
+                # arrival, then start probation immediately
+                dfi.loc[idx, "bool_in_probation"] = 1
+                # add a perturbation to the leaving time
+                dfi.loc[idx, "rel_probation"] *= np.random.uniform(0.7, 1.3)
+                dfi.loc[idx, "rel_off_probation"] = rel_off_probation
+                # update the state and scores
                 dfi.loc[idx, "state"] = self.state_defs.get_state(dfi.loc[idx])
                 dfi.loc[idx, "state_lst"] = StateVal(dfi.loc[idx, "state"].value)
                 dfi.loc[idx, "score_state"] = self.state_defs.get_score(dfi.loc[idx])
                 dfi.loc[idx, "score_comm"] = dfc_dict.get(dfi.loc[idx, "code_county"])
                 dfi.loc[idx, "score"] = self.produce_score(idx, dfi)
-                # add a perturbation to the leaving time
-                dfi.loc[idx, "bool_in_probation"] = 1
-                dfi.loc[idx, "rel_probation"] *= np.random.uniform(0.7, 1.3)
-                dfi.loc[idx, "rel_off_probation"] = rel_off_probation
 
                 # not assigned to any treatment yet
                 dfi.loc[idx, "score_with_treat"] = dfi.loc[idx, "score"]
@@ -549,32 +638,46 @@ class Simulator(object):
                 dfi.loc[idx, "hash_leave"] = _leaving.hashid
 
                 # generate next arrival individual
-                _new_row = dfpop.sample(1).iloc[0]
-                _arrival = self.func_arrival(
-                    _new_row,
-                    t,
-                    n_persons_appeared + 1,
-                    _new_row.name,
-                )
-                if _arrival is not None:
-                    opt_verbosity >= 2 and print(
-                        self.log_event(_arrival, gen=True), file=fo
+                if info == EventType.EVENT_ARR:
+                    _new_row = dfpop.sample(1).iloc[0]
+                    _arrival = self.func_arrival(
+                        _new_row,
+                        t,
+                        person_id_max + 1,
+                        _new_row.name,
                     )
-                    event_queue.put((_arrival.priority, _arrival))
+                    if _arrival is not None:
+                        opt_verbosity >= 2 and print(
+                            self.log_event(_arrival, gen=True), file=fo
+                        )
+                        event_queue.put((_arrival.priority, _arrival))
 
-                    num_lbd[_row["code_county"], dfi.loc[idx, "state"], _episode] += 1
+                        num_lbd[
+                            _row["code_county"], dfi.loc[idx, "state"], _episode
+                        ] += 1
 
             elif info == EventType.EVENT_END_PROD:
                 # process leaving events
                 dfi.loc[idx, "ep_end_probation"] = _episode
                 dfi.loc[idx, "bool_in_probation"] = 0
+                _revoke_event = revert_treatment(dfi, idx, t)
+                if _revoke_event is not None:
+                    opt_verbosity >= 2 and print(
+                        self.log_event(_revoke_event, gen=False), file=fo
+                    )
 
             elif info == EventType.EVENT_LEAVE:
                 # process leaving events
                 dfi.loc[idx, "bool_left"] = _bool_skip_next_offense = 1
                 dfi.loc[idx, "ep_leaving"] = _episode
                 dfi.loc[idx, "type_left"] = ReasonToLeave.END_OF_PROCESS
+                num_lft[_row["code_county"], _row["state"], _episode] += 1
 
+            elif info == EventType.EVENT_INCARCERATION:
+                # process incarceration events
+                dfi.loc[idx, "bool_left"] = _bool_skip_next_offense = 1
+                dfi.loc[idx, "ep_leaving"] = _episode
+                dfi.loc[idx, "type_left"] = ReasonToLeave.INCARCERATION
                 num_lft[_row["code_county"], _row["state"], _episode] += 1
 
             elif info == EventType.EVENT_RECID:
@@ -590,28 +693,79 @@ class Simulator(object):
 
                 # per-episode number of arrests
                 num_y[_row["code_county"], _row["state"], _episode] += 1
-
-                # ------------------------------------------------------------------------------
-                # an off-probation offense?
-                # ------------------------------------------------------------------------------
-                # if offend not in the probation term, then the individual is leaving
-                #   and is returning to the community
                 dfi.loc[idx, "felony_arrest"] = dfi.loc[idx, "felony_arrest"] + 1
-                if dfi.loc[idx, "bool_in_probation"] == 0:
+
+                # ------------------------------------------------------------
+                # an incarceration event?
+                # ------------------------------------------------------------
+                _bool_off_probation = dfi.loc[idx, "bool_in_probation"] == 0
+                _bool_is_incarceration_event = (dfi.loc[idx, "prison_rate"] > 0) and (
+                    np.random.uniform(0, 1) < dfi.loc[idx, "prison_rate"]
+                )
+                _bool_should_be_incarcerated = _bool_is_incarceration_event or (
+                    _bool_off_probation  # it is off probation and returned too many times
+                    and dfi.loc[idx, "return_times"] >= DEFAULT_MAX_RETURNS
+                )
+                if _bool_should_be_incarcerated:
+                    _incarceration = self.__default_incarceration(dfi.loc[idx], t)
+                    opt_verbosity >= 2 and print(
+                        self.log_event(_incarceration, gen=True), file=fo
+                    )
+                    event_queue.put((_incarceration.priority, _incarceration))
+                    # cancel prescheduled leaving event
+                    self.events_cancelled[dfi.loc[idx, "hash_leave"]] = (
+                        _incarceration.hashid
+                    )
+                    self.events_cancelled[dfi.loc[idx, "hash_end_probation"]] = (
+                        _incarceration.hashid
+                    )
+                    _bool_skip_next_offense = True
+                    _revoke_event = revert_treatment(dfi, idx, t)
+                    if _revoke_event is not None:
+                        opt_verbosity >= 2 and print(
+                            self.log_event(_revoke_event, gen=False), file=fo
+                        )
+
+                elif _bool_off_probation:
                     # this person is returning to the community (again)
                     dfi.loc[idx, "return_times"] = dfi.loc[idx, "return_times"] + 1
                     dfi.loc[idx, "bool_in_probation"] = 1
                     _return = self.__default_return(dfi.loc[idx], t)
                     opt_verbosity >= 2 and print(
-                        self.log_event(_return, gen=True), file=fo
+                        self.log_event(_return, gen=False), file=fo
                     )
                     event_queue.put((_return.priority, _return))
+
                     # cancel prescheduled leaving event
-                    self.events_cancelled.add(dfi.loc[idx, "hash_leave"])
+                    self.events_cancelled[dfi.loc[idx, "hash_leave"]] = _return.hashid
                     _bool_skip_next_offense = True
+                    _revoke_event = revert_treatment(dfi, idx, t)
+                    if _revoke_event is not None:
+                        opt_verbosity >= 2 and print(
+                            self.log_event(_revoke_event, gen=False), file=fo
+                        )
 
             else:
                 raise ValueError(f"Unknown event type: {info}")
+
+            # ------------------------------------------------------------
+            # sample next survival time
+            # ------------------------------------------------------------
+            if _bool_skip_next_offense:
+                # does not seem necessary to drop the individual
+                # dfi.drop(index=idx, inplace=True)
+                pass
+
+            elif info in (
+                EventType.EVENT_ARR,
+                EventType.EVENT_RECID,
+                EventType.EVENT_RETURN,
+            ):
+                _new_event = self.get_new_recid_event(
+                    dfi.loc[idx], t_now=t, opt_verbosity=opt_verbosity, fo=fo
+                )
+                if _new_event is not None:
+                    event_queue.put((_new_event.priority, _new_event))
 
             # ------------------------------------------------------------
             # update the community score;
@@ -684,9 +838,34 @@ class Simulator(object):
                 # produce the score
                 dfi.loc[_idx_staying, "score"] = self.produce_score(_idx_staying, dfi)
 
+                # ------------------------------------------------------------------------------
                 # apply treatment rule
-                func_treatment(dfi, **func_treatment_kwargs)
+                # ------------------------------------------------------------------------------
+
+                idx_selected = func_treatment(
+                    dfi,
+                    # @note: by c.z (2025-09-10)
+                    # actually not needed because we will mark the decision as made;
+                    # will not be able to enter the pool again...
+                    str_qualifying=str_qualifying_for_treatment,
+                    str_current_enroll=str_current_enroll,
+                    **func_treatment_kwargs,
+                    t=t,
+                )
                 dfi["bool_treat_made"] = 1
+
+                current_enrollment = dfi.query(str_current_enroll).shape[0]
+                self.num_n_enrollment = {
+                    p: current_enrollment,
+                    **self.num_n_enrollment,
+                }
+                for idx in idx_selected:
+                    _admit_event = Event(t, 0.0, idx, EventType.EVENT_ADMIT, idx_ref=-1)
+                    if _admit_event is not None:
+                        opt_verbosity >= 2 and print(
+                            self.log_event(_admit_event, gen=False),
+                            file=fo,
+                        )
 
                 # keep trajectory
                 dfc_sorted = dfc.assign(snap=p).reset_index()
@@ -697,23 +876,6 @@ class Simulator(object):
 
                 p = _episode
 
-            # ------------------------------------------------------------
-            # sample next survival time
-            # ------------------------------------------------------------
-            if _bool_skip_next_offense:
-                # does not seem necessary to drop the individual
-                # dfi.drop(index=idx, inplace=True)
-                pass
-            elif info in (
-                EventType.EVENT_RECID,
-                EventType.EVENT_ARR,
-                EventType.EVENT_RETURN,
-            ):
-                _new_event = self.get_new_recid_event(
-                    dfi.loc[idx], t_now=t, opt_verbosity=opt_verbosity, fo=fo
-                )
-                if _new_event is not None:
-                    event_queue.put((_new_event.priority, _new_event))
         # ensure bar is complete and close cleanly
         if _pbar.n < T_max:
             _pbar.update(T_max - _pbar.n)
@@ -728,13 +890,18 @@ class Simulator(object):
             + f"{'type':>4s} {'time':>10s} {'dura.':>10s} {'person':>18s} {'priority':>10s}"
         )
 
-    def log_event(self, event, gen=False):
+    def log_event(self, event, gen=False, cancel=None):
         priority, _ac, tau, idx, info = event.unpack()
         _agg_id = f"{idx}".zfill(10) + f"^({event.idx_ref})"
         if gen:
             return (
                 "   |-:gene/   "
                 + f"{info:>4s} {_ac:10.2f} {tau:10.2f} {_agg_id:>18s} {priority:10d}"
+            )
+        elif cancel is not None:
+            return (
+                "event:canc/   "
+                + f"{info:>4s} {_ac:10.2f} {tau:10.2f} {_agg_id:>18s} {priority:10d} cancelled by {cancel}"
             )
         else:
             return (
@@ -755,7 +922,10 @@ class Simulator(object):
             self.__save_df_as_excel(df_result, "result")
             self.__save_df_as_excel(df_result_comm, "result_comm")
         # plot trend
-        self.fig_trend = plot_trend(self)
+        self.fig_trend = plot_community_trend(self)
+
+    def summarize_trajectory(self, *args, **kwargs):
+        return summarize_trajectory(self, *args, **kwargs)
 
     def __save_df_as_excel(self, df, name):
         # save the full result to excel
@@ -767,450 +937,6 @@ class Simulator(object):
         wb.new_sheet("Sheet1", data=data)
         wb.save(f"{name}.xlsx")
         print(f"{name}.xlsx successfully saved...")
-
-    def summarize_trajectory(
-        self,
-        p_freeze,
-        df_community,
-        state_lst_columns=["state_lst"],
-        state_columns=["state"],
-        windowsize=10,
-    ):
-        snaps = len(self.t_dfi)
-        results = []
-        results_df = []
-        results_flow = []
-        results_retention = []
-        for p in range(0, snaps - 1):
-            df_begin = (
-                self.t_dfi[p]
-                .copy()
-                .dropna(subset=["state", "state_lst"])
-                .assign(
-                    state=lambda df: df["state"].apply(lambda x: x.value),
-                    state_lst=lambda df: df["state_lst"].apply(lambda x: x.value),
-                )
-            )
-            lst_cols_avail = [c for c in state_lst_columns if c in df_begin.columns]
-            cur_cols_avail = [c for c in state_columns if c in df_begin.columns]
-
-            grp_keys_lst = ["code_county"] + lst_cols_avail
-            grp_keys_cur = ["code_county"] + cur_cols_avail
-            grp_keys_flow = grp_keys_lst + cur_cols_avail
-            _boundary = p + p_freeze
-            _present_start_mask = (df_begin["ep_arrival"] < _boundary) & (
-                df_begin["ep_leaving"] >= _boundary
-            )
-            _present_end_mask = (df_begin["ep_arrival"] <= _boundary) & (
-                df_begin["ep_leaving"] > _boundary
-            )
-            _leave_now_mask = df_begin["ep_leaving"] == _boundary
-            _arrive_now_mask = df_begin["ep_arrival"] == _boundary
-            _recid_now_mask = df_begin["ep_lastre"] == _boundary
-
-            df_presence_begin = df_begin.loc[_present_start_mask]
-            x0 = df_presence_begin.groupby(grp_keys_lst)["index"].count()
-            x = df_begin.loc[_present_end_mask].groupby(grp_keys_cur)["index"].count()
-            y = df_begin.loc[_recid_now_mask].groupby(grp_keys_flow)["index"].count()
-            yout = y.groupby(grp_keys_lst).sum()
-            yin = y.groupby(grp_keys_cur).sum()
-            lmd = df_begin.loc[_arrive_now_mask].groupby(grp_keys_lst)["index"].count()
-            lv = (
-                df_presence_begin.loc[_leave_now_mask]
-                .groupby(grp_keys_lst)["index"]
-                .count()
-            )
-            tau = df_presence_begin.groupby(grp_keys_lst)["bool_treat"].sum()
-            df_traj = (
-                pd.DataFrame(
-                    {
-                        "x0": x0,
-                        "x": x,
-                        "lmd": lmd,
-                        "lv": lv,
-                        "yin": yin,
-                        "yout": yout,
-                        "tau": tau,
-                    }
-                )
-                .fillna(0)
-                .rename_axis(index=grp_keys_lst)
-                .assign(
-                    xcal=lambda df: df.apply(
-                        lambda row: row["x0"]
-                        + row["lmd"]
-                        - row["lv"]
-                        + row["yin"]
-                        - row["yout"],
-                        axis=1,
-                    ),
-                    error=lambda df: df["xcal"] - df["x"],
-                )
-            )
-            error = df_traj["error"].sum()
-            print(f"error @ p={p}: {error}")
-            rr = {}
-            for cc in df_community.index:
-                try:
-                    if (
-                        isinstance(y.index, pd.MultiIndex)
-                        and "code_county" in y.index.names
-                    ):
-                        sub = y.xs(cc, level="code_county", drop_level=True)
-                        items = sub.to_dict().items()
-                        yc = [
-                            [*(k if isinstance(k, tuple) else (k,)), v]
-                            for k, v in items
-                        ]
-                    else:
-                        yc = {}
-                except Exception:
-                    yc = {}
-                try:
-                    other = df_traj.loc[cc, :].to_dict()
-                except Exception:
-                    other = {}
-                rr[cc] = {**other, "y": yc}
-            results.append(rr)
-            results_df.append(df_traj)
-
-            # compute exact flows from previous state(s) to current state(s)
-            try:
-                # classify x/y strictly by arrest count change at the boundary:
-                # y: recidivism occurs at boundary; x: present and no recidivism and not leaving
-                # x: present at start and no recid at boundary (ignoring leave/end presence)
-                x_flow_df = (
-                    df_begin.loc[_present_start_mask & (~_recid_now_mask)]
-                    .groupby(grp_keys_flow)["index"]
-                    .count()
-                    .rename("count")
-                    .reset_index()
-                )
-                x_flow_df["source"] = "x"
-                # ratio per origin (code_county + previous-state columns) within source x
-                _xtot = x_flow_df.groupby(grp_keys_lst)["count"].transform("sum")
-                x_flow_df["ratio"] = np.where(
-                    _xtot > 0, x_flow_df["count"] / _xtot, 0.0
-                )
-
-                # y: present at start and recid at boundary (ignoring leave/end presence)
-                y_flow_df = (
-                    df_begin.loc[_present_start_mask & _recid_now_mask]
-                    .groupby(grp_keys_flow)["index"]
-                    .count()
-                    .rename("count")
-                    .reset_index()
-                )
-                y_flow_df["source"] = "y"
-                # ratio per origin (code_county + previous-state columns) within source y
-                _ytot = y_flow_df.groupby(grp_keys_lst)["count"].transform("sum")
-                y_flow_df["ratio"] = np.where(
-                    _ytot > 0, y_flow_df["count"] / _ytot, 0.0
-                )
-
-                # arrivals as separate source with previous-state marked 'NEW'
-                arrival_flow_df = (
-                    df_begin.loc[_arrive_now_mask]
-                    .groupby(grp_keys_cur)["index"]
-                    .count()
-                    .rename("count")
-                    .reset_index()
-                )
-                for prev_col in lst_cols_avail:
-                    arrival_flow_df[prev_col] = "NEW"
-                _missing_cols = [
-                    c for c in grp_keys_flow if c not in arrival_flow_df.columns
-                ]
-                for c in _missing_cols:
-                    if c in lst_cols_avail:
-                        arrival_flow_df[c] = "NEW"
-                    else:
-                        arrival_flow_df[c] = np.nan
-                arrival_flow_df = arrival_flow_df[grp_keys_flow + ["count"]]
-                arrival_flow_df["source"] = "new"
-                _ntot_new = arrival_flow_df.groupby(grp_keys_lst)["count"].transform(
-                    "sum"
-                )
-                arrival_flow_df["ratio"] = np.where(
-                    _ntot_new > 0, arrival_flow_df["count"] / _ntot_new, 0.0
-                )
-
-                flow_df = pd.concat(
-                    [x_flow_df, y_flow_df, arrival_flow_df], ignore_index=True
-                ).assign(
-                    state_key=lambda df: df["state"].apply(
-                        self.state_defs.state_key_range.get
-                    ),
-                    state_lst_key=lambda df: df["state_lst"].apply(
-                        self.state_defs.state_key_range.get
-                    ),
-                )
-            except Exception:
-                # fallback to empty frame if grouping keys are missing
-                flow_df = pd.DataFrame(columns=grp_keys_flow + ["count", "source", "ratio", "ratio_all"])  # type: ignore
-
-            # compute ratios: within-source and across all sources per origin
-            if len(flow_df) > 0:
-                _src_tot = flow_df.groupby(grp_keys_lst + ["source"], group_keys=False)[
-                    "count"
-                ].transform("sum")
-                flow_df["ratio"] = np.where(
-                    _src_tot > 0, flow_df["count"] / _src_tot, 0.0
-                )
-                _orig_tot = flow_df.groupby(grp_keys_lst, group_keys=False)[
-                    "count"
-                ].transform("sum")
-                flow_df["ratio_all"] = np.where(
-                    _orig_tot > 0, flow_df["count"] / _orig_tot, 0.0
-                )
-
-            # sort by code_county, source, previous-state columns, then current-state columns
-            sort_cols = ["code_county", "source"] + lst_cols_avail + cur_cols_avail
-            sort_cols = [c for c in sort_cols if c in flow_df.columns]
-            if len(sort_cols) > 0:
-                flow_df = flow_df.sort_values(by=sort_cols).reset_index(drop=True)
-
-            flow_df["snap"] = p
-            results_flow.append(flow_df)
-
-            # compute retention per origin based on starts (including arrivals) and leaves
-            _start_mask_union = _present_start_mask | _arrive_now_mask
-            _starts = (
-                df_begin.loc[_start_mask_union].groupby(grp_keys_lst)["index"].count()
-            )
-            _leaves = (
-                df_begin.loc[_leave_now_mask & _start_mask_union]
-                .groupby(grp_keys_lst)["index"]
-                .count()
-            )
-            _ret_df = (
-                pd.DataFrame({"total": _starts, "left": _leaves})
-                .fillna(0)
-                .assign(
-                    stay=lambda d: d["total"] - d["left"],
-                    retention_ratio=lambda d: np.where(
-                        d["total"] > 0, (d["total"] - d["left"]) / d["total"], 0.0
-                    ),
-                )
-                .reset_index()
-            )
-            _ret_df["snap"] = p
-            retention_df = _ret_df.assign(
-                state_lst_key=lambda df: df["state_lst"].apply(
-                    self.state_defs.state_key_range.get
-                ),
-            )
-
-            results_retention.append(retention_df)
-
-        # compute moving-average counts first, then ratios over last N episodes
-        if len(results_flow) > 0:
-            _all_flow = pd.concat(results_flow, ignore_index=True)
-            needed_cols = grp_keys_flow + ["source", "snap", "count"]
-            if all(c in _all_flow.columns for c in needed_cols):
-                _all_flow = _all_flow.sort_values(by=grp_keys_flow + ["source", "snap"])
-                # rolling average counts per origin+source+destination
-                _all_flow["count_ma"] = (
-                    _all_flow.groupby(grp_keys_flow + ["source"], group_keys=False)[
-                        "count"
-                    ]
-                    .rolling(window=windowsize, min_periods=10)
-                    .mean()
-                    .reset_index(level=list(range(len(grp_keys_flow) + 1)), drop=True)
-                )
-                # per-source normalization across destinations
-                _all_flow["origin_source_total_ma"] = _all_flow.groupby(
-                    grp_keys_lst + ["source", "snap"], group_keys=False
-                )["count_ma"].transform("sum")
-                _all_flow["ratio_ma"] = np.where(
-                    _all_flow["origin_source_total_ma"] > 0,
-                    _all_flow["count_ma"] / _all_flow["origin_source_total_ma"],
-                    0.0,
-                )
-                # across all sources normalization
-                _all_flow["origin_total_ma"] = _all_flow.groupby(
-                    grp_keys_lst + ["snap"], group_keys=False
-                )["count_ma"].transform("sum")
-                _all_flow["ratio_all_ma"] = np.where(
-                    _all_flow["origin_total_ma"] > 0,
-                    _all_flow["count_ma"] / _all_flow["origin_total_ma"],
-                    0.0,
-                )
-                results_flow = [
-                    _all_flow[_all_flow["snap"] == snap].reset_index(drop=True)
-                    for snap in sorted(_all_flow["snap"].unique())
-                ]
-
-        # compute retention
-        try:
-            if len(results_retention) > 0:
-                _all_ret = pd.concat(results_retention, ignore_index=True)
-                if all(
-                    c in _all_ret.columns
-                    for c in grp_keys_lst + ["snap", "stay", "left"]
-                ):
-                    _all_ret = _all_ret.sort_values(by=grp_keys_lst + ["snap"])
-                    # rolling average counts then compute ratio
-                    _all_ret["stay_ma"] = (
-                        _all_ret.groupby(grp_keys_lst, group_keys=False)["stay"]
-                        .rolling(window=windowsize, min_periods=10)
-                        .mean()
-                        .reset_index(level=list(range(len(grp_keys_lst))), drop=True)
-                    )
-                    _all_ret["left_ma"] = (
-                        _all_ret.groupby(grp_keys_lst, group_keys=False)["left"]
-                        .rolling(window=windowsize, min_periods=10)
-                        .mean()
-                        .reset_index(level=list(range(len(grp_keys_lst))), drop=True)
-                    )
-                    _all_ret["total_ma"] = _all_ret["stay_ma"] + _all_ret["left_ma"]
-                    _all_ret["retention_ratio_ma"] = np.where(
-                        _all_ret["total_ma"] > 0,
-                        _all_ret["stay_ma"] / _all_ret["total_ma"],
-                        0.0,
-                    )
-                    results_retention = [
-                        _all_ret[_all_ret["snap"] == snap].reset_index(drop=True)
-                        for snap in sorted(_all_ret["snap"].unique())
-                    ]
-                    results_retention = [
-                        _all_ret[_all_ret["snap"] == snap].reset_index(drop=True)
-                        for snap in sorted(_all_ret["snap"].unique())
-                    ]
-        except Exception:
-            pass
-
-        # sum of last 20 results
-        # without having na
-        from functools import reduce
-
-        mean_df = reduce(
-            lambda x, y: x.add(y, fill_value=0), results_df[-windowsize:]
-        ).astype(float)
-        mean_df = mean_df / windowsize
-
-        # build transition matrices Px and Py (state_lst_key -> state_key)
-
-        cols_needed = {
-            "state_key",
-            "state_lst_key",
-            "source",
-            "snap",
-            "ratio_ma",
-        }
-        if cols_needed.issubset(_all_flow.columns):
-            num_states = max(self.state_defs.state_key_range.values()) + 1
-            Px = np.zeros((num_states, num_states), dtype=float)
-            Py = np.zeros((num_states, num_states), dtype=float)
-            last_snap = int(sorted(_all_flow["snap"].unique())[-1])
-            flow_last = _all_flow[_all_flow["snap"] == last_snap]
-
-            def _fill_matrix(df_src, M):
-                dfw = df_src.copy().fillna(0.0)
-                dfw = dfw.dropna(
-                    subset=["state_key", "state_lst_key"]
-                )  # ensure valid keys
-                if len(dfw) == 0:
-                    return
-                # use ratio_ma directly (already conditional per origin),
-                # average across counties and renormalize per origin
-                grouped = dfw.groupby(["state_lst_key", "state_key"], as_index=False)[
-                    "ratio_ma"
-                ].mean()
-                row_sum = grouped.groupby("state_lst_key")["ratio_ma"].sum().to_dict()
-                for _, r in grouped.iterrows():
-                    i = int(r["state_lst_key"])  # origin
-                    j = int(r["state_key"])  # destination
-                    s = float(row_sum.get(i, 0.0))
-                    p = (float(r["ratio_ma"]) / s) if s > 0 else 0.0
-                    if 0 <= i < num_states and 0 <= j < num_states:
-                        M[i, j] = p
-
-            _fill_matrix(flow_last[flow_last["source"] == "x"], Px)
-            _fill_matrix(flow_last[flow_last["source"] == "y"], Py)
-
-            # save on simulator for downstream use
-            self.Px = Px
-            self.Py = Py
-            # also save flattened vectors; fill zeros for missing entries
-            self.Px_vec = Px.flatten()
-            self.Py_vec = Py.flatten()
-
-        # also, save x, x0, lmd, lv, yout, yin, tau from mean_df
-        # retention_ratio_ma from results_retention[-1]
-
-        try:
-            # map mean_df to include state_lst_key for vector placement
-            _md = mean_df.reset_index()
-            if "state_lst" in _md.columns:
-                _md["state_lst_key"] = _md["state_lst"].map(
-                    self.state_defs.state_key_range
-                )
-            num_states = max(self.state_defs.state_key_range.values()) + 1
-
-            def _to_vec(column_name: str) -> np.ndarray:
-                vec = np.zeros(num_states, dtype=float)
-                if column_name in _md.columns and "state_lst_key" in _md.columns:
-                    for _, r in _md.dropna(subset=["state_lst_key"]).iterrows():
-                        k = (
-                            int(r["state_lst_key"])
-                            if not pd.isna(r["state_lst_key"])
-                            else -1
-                        )
-                        if 0 <= k < num_states:
-                            vec[k] = (
-                                float(r[column_name])
-                                if not pd.isna(r[column_name])
-                                else 0.0
-                            )
-                return vec
-
-            self.x0_vec = _to_vec("x0")
-            self.x_vec = _to_vec("x")
-            self.lmd_vec = _to_vec("lmd")
-            self.lv_vec = _to_vec("lv")
-            self.yout_vec = _to_vec("yout")
-            self.yin_vec = _to_vec("yin")
-            self.tau_vec = _to_vec("tau")
-        except Exception:
-            pass
-
-        try:
-            # retention vector from latest retention snapshot
-            if len(results_retention) > 0:
-                last_ret = results_retention[-1]
-                num_states = max(self.state_defs.state_key_range.values()) + 1
-                self.retention_vec = np.zeros(num_states, dtype=float)
-                col = (
-                    "retention_ratio_ma"
-                    if "retention_ratio_ma" in last_ret.columns
-                    else "retention_ratio"
-                )
-                if "state_lst_key" in last_ret.columns and col in last_ret.columns:
-                    for _, r in last_ret.dropna(subset=["state_lst_key"]).iterrows():
-                        k = (
-                            int(r["state_lst_key"])
-                            if not pd.isna(r["state_lst_key"])
-                            else -1
-                        )
-                        if 0 <= k < num_states:
-                            self.retention_vec[k] = max(
-                                float(r[col]) if not pd.isna(r[col]) else 0.0, 0.1
-                            )
-        except Exception:
-            pass
-
-        return (
-            mean_df.reset_index().assign(
-                state_lst_key=lambda df: df["state_lst"].map(
-                    self.state_defs.state_key_range
-                ),
-            ),
-            results,
-            results_df,
-            results_flow,
-            results_retention,
-        )
 
     # ------------------------------------------------------------------------------
     # EVENT GENERATION FUNCTIONS
@@ -1234,8 +960,29 @@ class Simulator(object):
 # ------------------------------------------------------------------------------
 # some default utilities
 # ------------------------------------------------------------------------------
+
+
+def revert_treatment(
+    dfi, idx, t, bool_keep_treatment_effect=DEFAULT_BOOL_KEEP_TREATMENT_EFFECT, **kwargs
+):
+    is_treated = dfi.loc[idx, "bool_treat"]
+    dfi.loc[idx, "treat_end"] = t if is_treated == 1.0 else 0.0
+    dfi.loc[idx, "bool_treat"] = 0.0
+    if not bool_keep_treatment_effect:
+        dfi.loc[idx, "score_with_treat"] = dfi.loc[idx, "score"]
+    if is_treated == 1.0:
+        return Event(t, 0.0, idx, EventType.EVENT_REVOKE, idx_ref=-1)
+    return None
+
+
 def arrival_exp(beta_arrival, row, t_now, idx, idx_ref):
     _tau = np.random.exponential(beta_arrival)
+    e = Event(t_now + _tau, _tau, idx, EventType.EVENT_ARR, idx_ref=idx_ref)
+    return e
+
+
+def arrival_constant(beta_arrival, row, t_now, idx, idx_ref):
+    _tau = beta_arrival
     e = Event(t_now + _tau, _tau, idx, EventType.EVENT_ARR, idx_ref=idx_ref)
     return e
 
@@ -1255,7 +1002,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
-def plot_trend(simulator: Simulator):
+def plot_community_trend(simulator: Simulator):
     # Unique counties and consistent color map
     counties = simulator.df_result_comm["code_county"].unique()
     colors = px.colors.qualitative.Plotly

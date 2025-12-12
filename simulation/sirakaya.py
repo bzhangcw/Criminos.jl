@@ -86,9 +86,9 @@ def age_dist_to_age(age_dist):
     # random between the lower and upper bound
     # if already 6 then set 55
     if int(age_dist) == 6:
-        return 55
-    return np.random.randint(
-        age_dist_map[int(age_dist) - 1], age_dist_map[int(age_dist)]
+        return 55.0
+    return float(
+        np.random.randint(age_dist_map[int(age_dist) - 1], age_dist_map[int(age_dist)])
     )
 
 
