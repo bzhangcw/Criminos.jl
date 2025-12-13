@@ -77,7 +77,11 @@ from simulation_treatment import (
     treatment_rule_priority,
     treatment_rule_random,
 )
-from simulation_stats import summarize_trajectory, evaluation_metrics
+from simulation_stats import (
+    summarize_trajectory_bak,
+    summarize_trajectory,
+    evaluation_metrics,
+)
 
 
 def encode_priority(t):

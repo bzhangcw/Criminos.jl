@@ -56,13 +56,23 @@ Refit the baseline hazard after adding a new covariate `new_col`.
 
 
 def refit_baseline(
-    self, df_individual, new_col=None, bool_use_cph=False, baseline="breslow"
+    self,
+    df_individual,
+    new_col=None,
+    bool_use_cph=False,
+    baseline="breslow",
+    verbosity=0,
 ):
     if new_col is None:
         refit_baseline_no_extra(self, df_individual, baseline=baseline)
     else:
         refit_baseline_extra(
-            self, df_individual, new_col, bool_use_cph, baseline=baseline
+            self,
+            df_individual,
+            new_col,
+            bool_use_cph,
+            baseline=baseline,
+            verbosity=verbosity,
         )
 
 
@@ -101,7 +111,7 @@ def refit_baseline_no_extra(self, df_individual):
 
 
 def refit_baseline_extra(
-    self, df_individual, new_col, bool_use_cph=False, baseline="breslow"
+    self, df_individual, new_col, bool_use_cph=False, baseline="breslow", verbosity=0
 ):
     """
     Refit baseline hazard after adding one extra covariate `new_col`.
@@ -109,7 +119,8 @@ def refit_baseline_extra(
     into each subject's 'score' before recomputing the baseline.
     """
     df = df_individual
-    print(df_individual.columns)
+    if verbosity > 0:
+        print(df_individual.columns)
 
     # 2) Fit a Cox model with only new_col as a covariate, old_score as offset
     if baseline in ["gompertz", "breslow"]:
@@ -121,11 +132,14 @@ def refit_baseline_extra(
             duration_col="time",
             event_col="observed",
             formula=f"offset + {new_col}",
-            show_progress=True,
+            show_progress=(verbosity > 0),
         )
     else:
-        print("Using exponential AFT")
-        __refit_baseline_extra_aft_exponential(self, df_individual, new_col)
+        if verbosity > 0:
+            print("Using exponential AFT")
+        __refit_baseline_extra_aft_exponential(
+            self, df_individual, new_col, verbosity=verbosity
+        )
         return
 
     # 4) Compute a new linear predictor: score = α * offset + β * new_col
@@ -178,14 +192,15 @@ def refit_baseline_extra(
         "score_age_dist": cph.params_["lambda_"]["offset"],
         f"score_{new_col}": cph.params_["lambda_"][new_col],
     }
-    print(_scoring_weights)
+    if verbosity > 0:
+        print(_scoring_weights)
     self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, _scoring_weights)
 
     if baseline == "gompertz":
-        __override_Gompertz(self)
+        __override_Gompertz(self, verbosity=verbosity)
 
 
-def __override_Gompertz(self):
+def __override_Gompertz(self, verbosity=0):
     # 1) sample times
     t_min, t_max = self.cumhaz_df["time"].min(), self.cumhaz_df["time"].max()
     t_obs = np.linspace(t_min, t_max, 200)
@@ -196,13 +211,14 @@ def __override_Gompertz(self):
 
     # 3) fit params
     (a_hat, b_hat), _ = curve_fit(S_gompertz, t_obs, S_obs, p0=[0.1, 0.01])
-    print(a_hat, b_hat)
+    if verbosity > 0:
+        print(a_hat, b_hat)
 
     # 4) override the survival function
     self.s0 = lambda t: S_gompertz(t, a_hat, b_hat)
 
 
-def __refit_baseline_extra_aft_exponential(self, df_individual, new_col):
+def __refit_baseline_extra_aft_exponential(self, df_individual, new_col, verbosity=0):
     df = df_individual.copy()
     df["time"] += 1.0
 
@@ -213,7 +229,7 @@ def __refit_baseline_extra_aft_exponential(self, df_individual, new_col):
         duration_col="time",
         event_col="observed",
         regressors={"lambda_": f"offset + {new_col}"},
-        show_progress=True,
+        show_progress=(verbosity > 0),
     )
 
     # 4) Compute a new linear predictor: score = α * offset + β * new_col
@@ -255,5 +271,6 @@ def __refit_baseline_extra_aft_exponential(self, df_individual, new_col):
         "score_age_dist": cph.params_["lambda_"]["offset"],
         f"score_{new_col}": cph.params_["lambda_"][new_col],
     }
-    print(_scoring_weights)
+    if verbosity > 0:
+        print(_scoring_weights)
     self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, _scoring_weights)
