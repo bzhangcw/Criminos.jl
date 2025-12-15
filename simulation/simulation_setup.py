@@ -33,11 +33,15 @@ class SimulationSetup:
     """Configuration class for simulation parameters."""
 
     # Default values
-    p_length = 40
+    p_length = 60
     p_freeze = 0
-    T_max = 24000
+    T_max = 30000
     treatment_capacity = 50
     treatment_effect = 1.0
+    """@note: try not change to 1
+    1: vital for memory need about 5G RAM
+    2: 1 will be very slow to converge (need many epochs))
+    """
     beta_arrival = 2
     communities = {1}
     fit_kwargs = {
@@ -225,6 +229,7 @@ def run_sim(
         T_max=settings.T_max,
         p_length=settings.p_length,
         p_freeze=settings.p_freeze,
+        treatment_effect=settings.treatment_effect,
         func_treatment=func_treatment,
         func_treatment_kwargs=func_treatment_kwargs,
         str_qualifying_for_treatment=settings.str_qualifying_for_treatment,
@@ -326,9 +331,7 @@ def get_tests(settings=None):
         "null": (smt.treatment_null, dict()),
         "random": (
             smt.treatment_rule_random,
-            dict(
-                capacity=settings.treatment_capacity, effect=settings.treatment_effect
-            ),
+            dict(capacity=settings.treatment_capacity),
         ),
         "high-risk": (
             smt.treatment_rule_priority,
@@ -336,7 +339,6 @@ def get_tests(settings=None):
                 key="score",
                 capacity=settings.treatment_capacity,
                 ascending=False,
-                effect=settings.treatment_effect,
             ),
         ),
         "low-risk": (
@@ -345,7 +347,6 @@ def get_tests(settings=None):
                 key="score",
                 capacity=settings.treatment_capacity,
                 ascending=True,
-                effect=settings.treatment_effect,
             ),
         ),
         # "low-age-high-prev": (
@@ -378,7 +379,6 @@ def get_tests(settings=None):
                 key="score",
                 capacity=settings.treatment_capacity,
                 ascending=False,
-                effect=settings.treatment_effect,
                 exclude=lambda row: row["age_dist"] >= 3,
             ),
         ),
@@ -388,7 +388,6 @@ def get_tests(settings=None):
                 key="score",
                 capacity=settings.treatment_capacity,
                 ascending=False,
-                effect=settings.treatment_effect,
                 exclude=lambda row: row["felony_arrest"]
                 < thres_cutoff[row["age_dist"]],
             ),

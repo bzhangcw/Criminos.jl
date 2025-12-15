@@ -373,6 +373,7 @@ class Simulator(object):
         p_freeze=4,
         rel_off_probation=500,
         # ----------------------------------------------------------------------
+        treatment_effect=0.5,
         func_treatment=None,
         func_treatment_kwargs={},
         # ----------------------------------------------------------------------
@@ -844,6 +845,18 @@ class Simulator(object):
                     t=t,
                 )
                 dfi["bool_treat_made"] = 1
+
+                # Apply treatment effect to scores
+                # Since S(t|score) = S0(t)^exp(score) and higher score means more dangerous:
+                # - Higher score → exp(score) larger → S(t) smaller (since 0<S0<1) → higher offense
+                # To reduce offense, we need to lower the score:
+                # score_with_treat = score + log(treatment_effect)
+                # If treatment_effect = 0.5: score + log(0.5) = score - 0.693
+                # → Lower score → Higher survival → Lower offense ✓
+                if len(idx_selected) > 0:
+                    dfi.loc[idx_selected, "score_with_treat"] = dfi.loc[
+                        idx_selected, "score"
+                    ] + np.log(treatment_effect)
 
                 current_enrollment = dfi.query(str_current_enroll).shape[0]
                 self.num_n_enrollment = {
