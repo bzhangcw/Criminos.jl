@@ -7,6 +7,19 @@ import sys
 from pathlib import Path
 
 
+def parse_person_id(person_str):
+    """
+    Parse person ID string like '0000000031^(173)' or '0000000031^(-1)'.
+    Returns (base_id, sample_num) where sample_num is None if -1.
+    """
+    match = re.match(r"(\d+)\^\((-?\d+)\)", person_str)
+    if match:
+        base_id = match.group(1)
+        sample_num = int(match.group(2))
+        return base_id, sample_num if sample_num != -1 else None
+    return person_str, None
+
+
 def parse_log(log_file):
     """Parse the log file and extract events."""
     events = []
@@ -17,42 +30,75 @@ def parse_log(log_file):
             if "ready to go" in line or "finished" in line or "type       time" in line:
                 continue
 
-            # Parse event lines (both happened and generated)
+            # Parse happened event lines
             match = re.match(
-                r"\s*(event:happ/|\s+\|-:gene/)\s+(\w+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\S+)\s+(\d+)",
+                r"\s*event:happ/\s+(\w+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\S+)\s+(\d+)",
                 line,
             )
             if match:
-                event_type = match.group(1).strip()
-                event_name = match.group(2)
-                time = float(match.group(3))
-                duration = float(match.group(4))
-                person = match.group(5)
-                priority = int(match.group(6))
-
-                is_happened = "event:happ" in event_type
-
+                person_str = match.group(4)
+                base_id, sample_num = parse_person_id(person_str)
                 events.append(
                     {
-                        "type": event_name,
-                        "time": time,
-                        "duration": duration,
-                        "person": person,
-                        "priority": priority,
-                        "is_happened": is_happened,
+                        "status": "happened",
+                        "type": match.group(1),
+                        "time": float(match.group(2)),
+                        "duration": float(match.group(3)),
+                        "person": base_id,
+                        "person_full": person_str,
+                        "sample": sample_num,
+                        "priority": int(match.group(5)),
+                        "canceled_by": None,
                     }
                 )
+                continue
 
-            # Parse update score lines
-            match_score = re.match(r"event:happ/\s+(\d+):\s+(.+)", line)
-            if match_score:
+            # Parse generated event lines
+            match = re.match(
+                r"\s+\|-:gene/\s+(\w+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\S+)\s+(\d+)",
+                line,
+            )
+            if match:
+                person_str = match.group(4)
+                base_id, sample_num = parse_person_id(person_str)
                 events.append(
                     {
-                        "type": "score",
-                        "message": match_score.group(2),
-                        "is_happened": True,
+                        "status": "generated",
+                        "type": match.group(1),
+                        "time": float(match.group(2)),
+                        "duration": float(match.group(3)),
+                        "person": base_id,
+                        "person_full": person_str,
+                        "sample": sample_num,
+                        "priority": int(match.group(5)),
+                        "canceled_by": None,
                     }
                 )
+                continue
+
+            # Parse canceled event lines
+            match = re.match(
+                r"\s*event:canc/\s+(\w+)\s+(\d+\.\d+)\s+(\d+\.\d+)\s+(\S+)\s+(\d+)\s+cancelled by\s+(\S+)",
+                line,
+            )
+            if match:
+                person_str = match.group(4)
+                base_id, sample_num = parse_person_id(person_str)
+                canceled_by_ref = match.group(6)
+                events.append(
+                    {
+                        "status": "canceled",
+                        "type": match.group(1),
+                        "time": float(match.group(2)),
+                        "duration": float(match.group(3)),
+                        "person": base_id,
+                        "person_full": person_str,
+                        "sample": sample_num,
+                        "priority": int(match.group(5)),
+                        "canceled_by": canceled_by_ref,
+                    }
+                )
+                continue
 
     return events
 
@@ -64,7 +110,10 @@ def get_event_color(event_type):
         "offnd": "#FFB6C6",  # Light pink
         "retrn": "#87CEEB",  # Light blue
         "leave": "#FFA500",  # Orange
-        "score": "#FFFF99",  # Light yellow
+        "incar": "#DC143C",  # Crimson
+        "arriv": "#9370DB",  # Medium purple - arrival
+        "admit": "#32CD32",  # Lime green - admitted to program
+        "revok": "#FF6347",  # Tomato red - revoked from program
     }
     return colors.get(event_type, "#E0E0E0")
 
@@ -72,223 +121,177 @@ def get_event_color(event_type):
 def generate_mermaid(events, person_id=None):
     """Generate Mermaid diagram from events with timeline layout."""
 
-    # Filter events by person if specified
+    # Filter events by base person ID if specified
     if person_id:
-        events = [
-            e
-            for e in events
-            if e.get("person") == person_id or e.get("type") == "score"
-        ]
+        # Extract base ID from input (in case user provides full format)
+        base_id, _ = parse_person_id(person_id)
+        if base_id == person_id:
+            # Input was just the base ID, use as-is
+            base_id = person_id
+        events = [e for e in events if e.get("person") == base_id]
 
-    # Remove score events
-    events = [e for e in events if e["type"] != "score"]
+    if not events:
+        return "graph TD\n    Start([No events found])"
 
-    # Identify which generated events actually happened
-    generated_events_map = {}  # time+type -> gen_index
-    happened_events_map = {}  # time+type -> happened_index
-
-    for i, event in enumerate(events):
-        key = (event["time"], event["type"])
-        if not event["is_happened"]:
-            generated_events_map[key] = i
-        else:
-            happened_events_map[key] = i
-
-    # Identify canceled events
-    canceled_events = set()
-    for key, gen_idx in generated_events_map.items():
-        if key not in happened_events_map:
-            canceled_events.add(gen_idx)
-
-    # Build generation and cancellation relationships
-    generation_map = {}  # generated_idx -> generating_idx
-    cancellation_map = {}  # canceled_idx -> canceling_idx
-
-    # First pass: identify what generated each event
-    for i, event in enumerate(events):
-        if event["is_happened"]:
-            # Find all events generated by this one
-            j = i + 1
-            while j < len(events) and not events[j]["is_happened"]:
-                generation_map[j] = i
-                j += 1
-
-    # Second pass: for canceled events, find what canceled them
-    for gen_idx in canceled_events:
-        gen_event = events[gen_idx]
-        gen_time = gen_event["time"]
-        generating_idx = generation_map.get(gen_idx)
-
-        # Find which happened event after generation actually canceled it
-        # For leave events, look for the last retrn before gen_time
-        # For other events, look for the last offnd/retrn before gen_time
-        canceling_idx = None
-        if generating_idx is not None:
-            for i in range(generating_idx + 1, len(events)):
-                if events[i]["is_happened"] and events[i]["time"] < gen_time:
-                    # This event happens before the generated event's scheduled time
-                    if gen_event["type"] == "leave":
-                        # Leave events are canceled by retrn events
-                        if events[i]["type"] == "retrn":
-                            canceling_idx = i  # Keep updating to get the LAST retrn
-                    else:
-                        # Other events canceled by offnd or retrn
-                        if events[i]["type"] in ["offnd", "retrn"]:
-                            canceling_idx = i  # Keep updating to get the LAST one
-
-        if canceling_idx is not None:
-            cancellation_map[gen_idx] = canceling_idx
-
-    # Create a unified node map: (time, type) -> node_id
-    event_key_to_node = {}  # (time, type) -> node_id
+    # Create node map: use (time, type, status) to create unique nodes
+    # But merge happened events with their corresponding generated events
     node_map = {}  # event index -> node_id
-    happened_indices = []  # Track happened event indices in order
+    node_info = {}  # node_id -> info dict
 
-    # Use top-down layout
-    mermaid_lines = ["graph TD"]
-    mermaid_lines.append("    Start([Start<br/>T=0])")
+    # First pass: assign node IDs
+    # Key by (time, type) - merge happened/generated events at same time/type
+    time_type_to_node = {}
 
-    # Create nodes - prefer generated nodes, upgrade them to happened if they occur
     for i, event in enumerate(events):
-        time = event["time"]
-        event_type = event["type"]
-        key = (time, event_type)
-
-        if event["is_happened"]:
-            happened_indices.append(i)
-
-            # Check if this event was already generated
-            if key in event_key_to_node:
-                # Reuse the generated node
-                node_map[i] = event_key_to_node[key]
-            else:
-                # Create new node for happened event
-                node_id = f"N{i}"
-                node_map[i] = node_id
-                event_key_to_node[key] = node_id
-
-                label = f"{event_type}<br/>T={time:.0f}"
-                if event_type == "leave":
-                    mermaid_lines.append(f"    {node_id}([{label}])")  # Stadium
-                else:
-                    mermaid_lines.append(f"    {node_id}[{label}]")  # Box
-        else:
-            # Generated event
-            if key not in event_key_to_node:
-                node_id = f"N{i}"
-                node_map[i] = node_id
-                event_key_to_node[key] = node_id
-
-                label = f"{event_type}<br/>T={time:.0f}"
-                if i in canceled_events:
-                    label += "<br/>❌"
-                    mermaid_lines.append(f"    {node_id}{{{{'{label}'}}}}")  # Diamond
-                else:
-                    mermaid_lines.append(f"    {node_id}[/{label}/]")  # Parallelogram
-            else:
-                # This generated event has the same key as an existing node
-                node_map[i] = event_key_to_node[key]
-
-    # Create main timeline (happened events)
-    prev_happened = "Start"
-    for idx in happened_indices:
-        node_id = node_map[idx]
-        mermaid_lines.append(f"    {prev_happened} ==> {node_id}")
-        prev_happened = node_id
-
-    # Add generation arrows
-    # First, identify which happened events have no generation record
-    # These should be shown as generated from Start
-    happened_without_generation = set()
-    for i in happened_indices:
-        event = events[i]
         key = (event["time"], event["type"])
-        # If this happened event was never generated (not in generated_events_map), it's initial
-        if key not in generated_events_map:
-            happened_without_generation.add(i)
 
-    # Add arrows from Start to initial events (both generated-only and happened-without-generation)
-    if happened_indices:
-        first_happened_idx = happened_indices[0]
-        # Generated events before first happened event
-        for i in range(first_happened_idx):
-            if not events[i]["is_happened"] and i in node_map:
-                mermaid_lines.append(f"    Start -.-> {node_map[i]}")
+        if key not in time_type_to_node:
+            node_id = f"N{len(time_type_to_node)}"
+            time_type_to_node[key] = node_id
+            node_info[node_id] = {
+                "time": event["time"],
+                "type": event["type"],
+                "status": event["status"],
+                "canceled_by": event.get("canceled_by"),
+                "sample": event.get("sample"),  # Track sample number for arrivals
+            }
+        else:
+            # Update status - canceled always wins (it's the final state)
+            node_id = time_type_to_node[key]
+            if event["status"] == "canceled":
+                node_info[node_id]["status"] = "canceled"
+                node_info[node_id]["canceled_by"] = event.get("canceled_by")
+            elif (
+                event["status"] == "happened"
+                and node_info[node_id]["status"] == "generated"
+            ):
+                node_info[node_id]["status"] = "happened"
+            # Update sample if this event has one
+            if event.get("sample") is not None:
+                node_info[node_id]["sample"] = event.get("sample")
 
-        # Happened events with no generation record (initial events)
-        for i in happened_without_generation:
-            mermaid_lines.append(f"    Start -.-> {node_map[i]}")
+        node_map[i] = time_type_to_node[key]
 
+    # Build mermaid diagram
+    mermaid_lines = ["graph TD"]
+    mermaid_lines.append("    Start([Start])")
+
+    # Define nodes
+    for node_id, info in node_info.items():
+        # For arrival events, show sample number
+        if info["type"] == "arriv" and info.get("sample") is not None:
+            label = f"arriv<br/>T={info['time']:.0f}<br/>sample={info['sample']}"
+        else:
+            label = f"{info['type']}<br/>T={info['time']:.0f}"
+        status = info["status"]
+
+        if status == "happened":
+            if info["type"] == "leave":
+                mermaid_lines.append(f"    {node_id}([{label}])")  # Stadium
+            elif info["type"] == "arriv":
+                mermaid_lines.append(
+                    f"    {node_id}>{label}]"
+                )  # Asymmetric for arrival
+            elif info["type"] in ("admit", "revok"):
+                mermaid_lines.append(f"    {node_id}(({label}))")  # Circle
+            else:
+                mermaid_lines.append(f"    {node_id}[{label}]")  # Box
+        elif status == "canceled":
+            mermaid_lines.append(f"    {node_id}{{{label}}}")  # Diamond/Rhombus
+        else:  # generated
+            mermaid_lines.append(f"    {node_id}[/{label}/]")  # Parallelogram
+
+    # Create main timeline (only truly happened events, not canceled ones)
+    # Sort all events by time, then filter to those that are still "happened"
+    timeline_nodes = []
+    for node_id, info in sorted(node_info.items(), key=lambda x: x[1]["time"]):
+        if info["status"] == "happened":
+            if node_id not in timeline_nodes:
+                timeline_nodes.append(node_id)
+
+    prev_node = "Start"
+    for node_id in timeline_nodes:
+        mermaid_lines.append(f"    {prev_node} ==> {node_id}")
+        prev_node = node_id
+
+    # Group nodes by time for vertical alignment
+    nodes_by_time = {}
+    for node_id, info in node_info.items():
+        time_int = int(info["time"])
+        if time_int not in nodes_by_time:
+            nodes_by_time[time_int] = []
+        nodes_by_time[time_int].append(node_id)
+
+    # Add Start to time 0
+    if 0 not in nodes_by_time:
+        nodes_by_time[0] = []
+    nodes_by_time[0].append("Start")
+
+    # Create subgraphs for time alignment
+    for time in sorted(nodes_by_time.keys()):
+        nodes = list(set(nodes_by_time[time]))
+        if nodes:
+            mermaid_lines.append(f"    subgraph T{time}[ ]")
+            mermaid_lines.append(f"        direction LR")
+            for node in nodes:
+                mermaid_lines.append(f"        {node}")
+            mermaid_lines.append("    end")
+
+    # Note: Removed invisible links (~~~) as they may cause syntax errors in some Mermaid versions
+    # The subgraphs and main timeline arrows should provide sufficient ordering
+
+    # Add generation arrows (happened event -> generated events that follow it)
     for i, event in enumerate(events):
-        if not event["is_happened"]:
+        if event["status"] != "happened":
             continue
 
-        # Find all events generated by this one
-        generated_by_this = []
+        # Find generated events immediately following this happened event
         j = i + 1
-        while j < len(events) and not events[j]["is_happened"]:
-            generated_by_this.append(j)
+        while j < len(events) and events[j]["status"] == "generated":
+            src_node = node_map[i]
+            dst_node = node_map[j]
+            if src_node != dst_node:
+                mermaid_lines.append(f"    {src_node} -.-> {dst_node}")
             j += 1
 
-        # Add arrows to generated events
-        for gen_idx in generated_by_this:
-            mermaid_lines.append(f"    {node_map[i]} -.-> {node_map[gen_idx]}")
+    # Add cancellation arrows from the explicit "cancelled by" info
+    for node_id, info in node_info.items():
+        if info["status"] == "canceled" and info.get("canceled_by"):
+            # Parse canceled_by: format is "time_personid_type" e.g., "716.80_211_retrn"
+            ref = info["canceled_by"]
+            parts = ref.rsplit(
+                "_", 2
+            )  # Split from right to get time, person_suffix, type
+            if len(parts) >= 2:
+                try:
+                    cancel_time = float(parts[0])
+                    cancel_type = parts[-1]
 
-    # Add special arrows for canceled leave events showing their origin
-    for canceled_idx in canceled_events:
-        if events[canceled_idx]["type"] == "leave":
-            generating_idx = generation_map.get(canceled_idx)
-            if generating_idx is not None:
-                # Show where this leave was generated from
-                mermaid_lines.append(
-                    f"    {node_map[generating_idx]} -.🔴 gen leave .-> {node_map[canceled_idx]}"
-                )
+                    # Find the canceling node
+                    cancel_key = (cancel_time, cancel_type)
+                    if cancel_key in time_type_to_node:
+                        cancel_node = time_type_to_node[cancel_key]
+                        mermaid_lines.append(
+                            f"    {cancel_node} -. cancels .-> {node_id}"
+                        )
+                except (ValueError, IndexError):
+                    pass
 
-    # Add cancellation arrows (only return canceling leave)
-    for canceled_idx, canceling_idx in cancellation_map.items():
-        if (
-            events[canceled_idx]["type"] == "leave"
-            and events[canceling_idx]["type"] == "retrn"
-        ):
-            mermaid_lines.append(
-                f"    {node_map[canceling_idx]} -. ❌ cancels .-> {node_map[canceled_idx]}"
-            )
-
-    # Add styling - collect unique nodes and determine their status
+    # Add styling
     mermaid_lines.append("")
-    colors = get_event_color
+    for node_id, info in node_info.items():
+        color = get_event_color(info["type"])
+        status = info["status"]
 
-    styled_nodes = set()
-
-    for i, event in enumerate(events):
-        node_id = node_map[i]
-        if node_id in styled_nodes:
-            continue  # Already styled this node
-        styled_nodes.add(node_id)
-
-        color = colors(event["type"])
-
-        # Determine if this node represents a happened event
-        # Check if any happened event uses this node
-        is_happened = any(
-            node_map[j] == node_id and events[j]["is_happened"]
-            for j in range(len(events))
-        )
-
-        # Check if any canceled event uses this node
-        is_canceled = any(
-            node_map[j] == node_id and j in canceled_events for j in range(len(events))
-        )
-
-        if is_happened:
+        if status == "happened":
             mermaid_lines.append(
                 f"    style {node_id} fill:{color},stroke:#333,stroke-width:3px"
             )
-        elif is_canceled:
+        elif status == "canceled":
             mermaid_lines.append(
                 f"    style {node_id} fill:#FFD0D0,stroke:#FF0000,stroke-width:3px"
             )
-        else:
+        else:  # generated
             mermaid_lines.append(
                 f"    style {node_id} fill:#F0F0F0,stroke:#999,stroke-width:2px,stroke-dasharray: 5 5"
             )
@@ -296,7 +299,12 @@ def generate_mermaid(events, person_id=None):
     return "\n".join(mermaid_lines)
 
 
-def generate_html(mermaid_code, person_id=None):
+def get_assets_dir():
+    """Get the assets directory path."""
+    return Path(__file__).parent / "assets"
+
+
+def generate_html(mermaid_code, person_id=None, embed_assets=True):
     """Generate HTML file with embedded Mermaid diagram."""
     title = (
         f"Lifetime Visualization - Person {person_id}"
@@ -304,7 +312,30 @@ def generate_html(mermaid_code, person_id=None):
         else "Lifetime Visualization"
     )
 
-    html_template = f"""<!DOCTYPE html>
+    assets_dir = get_assets_dir()
+    template_path = assets_dir / "visualize.html"
+    css_path = assets_dir / "visualize.css"
+
+    if template_path.exists() and css_path.exists():
+        # Load template and CSS
+        template = template_path.read_text()
+        css = css_path.read_text()
+
+        # Replace placeholders
+        html = template.replace("{{title}}", title)
+        html = html.replace("{{mermaid_code}}", mermaid_code)
+
+        if embed_assets:
+            # Embed CSS inline for standalone HTML files
+            html = html.replace(
+                '<link rel="stylesheet" href="assets/visualize.css">',
+                f"<style>\n{css}\n    </style>",
+            )
+
+        return html
+    else:
+        # Fallback to inline template if assets not found
+        return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -312,105 +343,31 @@ def generate_html(mermaid_code, person_id=None):
     <title>{title}</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <style>
-        body {{
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            background-color: #f5f5f5;
-        }}
-        .container {{
-            max-width: 1200px;
-            margin: 0 auto;
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        h1 {{
-            color: #333;
-            border-bottom: 2px solid #4CAF50;
-            padding-bottom: 10px;
-        }}
-        .legend {{
-            margin: 20px 0;
-            padding: 15px;
-            background-color: #f9f9f9;
-            border-left: 4px solid #4CAF50;
-            border-radius: 4px;
-        }}
-        .legend h3 {{
-            margin-top: 0;
-            color: #333;
-        }}
-        .legend ul {{
-            margin: 10px 0;
-            padding-left: 20px;
-        }}
-        .legend li {{
-            margin: 5px 0;
-        }}
-        .mermaid-container {{
-            width: 100%;
-            margin: 20px 0;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            background: white;
-            padding: 20px;
-        }}
-        .mermaid {{
-            display: inline-block;
-        }}
+        body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }}
+        .container {{ max-width: 1200px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        h1 {{ color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }}
+        .mermaid-container {{ width: 100%; margin: 20px 0; border: 1px solid #ddd; border-radius: 8px; background: white; padding: 20px; overflow-x: auto; }}
+        .mermaid {{ display: inline-block; }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>{title}</h1>
-        
         <div class="mermaid-container">
             <div class="mermaid">
 {mermaid_code}
             </div>
         </div>
-        
-        <div class="legend">
-            <h3>Legend</h3>
-            <h4>Timeline (Top to Bottom)</h4>
-            <ul>
-                <li><strong>Thick arrows (==>):</strong> Main timeline - events that happened</li>
-                <li><strong>Dashed arrows (-.->):</strong> Generated/scheduled events</li>
-                <li><strong>🔴 gen leave arrows:</strong> Shows which event generated a canceled leave</li>
-                <li><strong>❌ cancels arrows:</strong> Return events that cancel leave events</li>
-            </ul>
-            <h4>Node Shapes & Colors</h4>
-            <ul>
-                <li><strong>Rectangle [Box]:</strong> Happened events (thick border)</li>
-                <li><strong>Stadium ([Box]):</strong> Leave system events</li>
-                <li><strong>Parallelogram [/Box/]:</strong> Generated events (not yet happened)</li>
-                <li><strong>Diamond {{Box}}:</strong> Canceled events with ❌</li>
-            </ul>
-            <h4>Event Type Colors</h4>
-            <ul>
-                <li><strong>🟢 Green:</strong> End probation (endpr)</li>
-                <li><strong>🩷 Pink:</strong> Offense (offnd)</li>
-                <li><strong>🔵 Blue:</strong> Return (retrn)</li>
-                <li><strong>🟠 Orange:</strong> Leave system (leave)</li>
-                <li><strong>⚪ Light Gray:</strong> Generated pending events</li>
-                <li><strong>🔴 Red:</strong> Canceled events</li>
-            </ul>
-        </div>
     </div>
-    
-    <script>
-        mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
-    </script>
+    <script>mermaid.initialize({{ startOnLoad: true, theme: 'default' }});</script>
 </body>
 </html>
 """
-    return html_template
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python visualize_log.py <log_file> [person_id] [-o output.html]")
+        print("Usage: python log_visualize.py <log_file> [person_id] [-o output.html]")
         sys.exit(1)
 
     log_file = sys.argv[1]
@@ -451,25 +408,6 @@ def main():
         print("```mermaid")
         print(mermaid_code)
         print("```")
-        print()
-        print("\n**Legend:**")
-        print("Timeline (Top to Bottom):")
-        print("  - Thick arrows (==>): Main timeline - events that happened")
-        print("  - Dashed arrows (-.->): Generated/scheduled events")
-        print("  - 🔴 gen leave arrows: Shows which event generated a canceled leave")
-        print("  - ❌ cancels arrows: Event that directly cancels another")
-        print("\nNode Shapes & Colors:")
-        print("  - Rectangle [Box]: Happened events (thick border)")
-        print("  - Stadium ([Box]): Leave system events")
-        print("  - Parallelogram [/Box/]: Generated events (not yet happened)")
-        print("  - Diamond {{Box}}: Canceled events with ❌")
-        print("\nEvent Type Colors:")
-        print("  - 🟢 Green: End probation (endpr)")
-        print("  - 🩷 Pink: Offense (offnd)")
-        print("  - 🔵 Blue: Return (retrn)")
-        print("  - 🟠 Orange: Leave system (leave)")
-        print("  - ⚪ Light Gray: Generated pending events")
-        print("  - 🔴 Red: Canceled events")
 
 
 if __name__ == "__main__":
