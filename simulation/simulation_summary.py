@@ -602,6 +602,297 @@ def plot_to_tex_equilibrium_box(
     return fig
 
 
+import numpy as np
+import pandas as pd
+from scipy.stats import ks_2samp
+
+
+def fsd_test(xa, xb, alpha=0.05):
+    """
+    Test if xa first-order stochastically dominates xb (xa is better, i.e., lower values).
+
+    Args:
+        xa: array of values for policy A (lower is better)
+        xb: array of values for policy B (lower is better)
+        alpha: significance level for hypothesis test
+
+    Returns:
+        dict with keys:
+            - ks_stat: KS test statistic
+            - p_value: p-value for one-sided KS test
+            - fsd_empirical: True if xa <= xb everywhere (empirical FSD)
+            - reject_at_alpha: True if we reject null at given alpha
+    """
+    xa, xb = np.asarray(xa), np.asarray(xb)
+
+    # one-sided KS: H1: F_a <= F_b (xa stochastically dominates xb)
+    ks = ks_2samp(xa, xb, alternative="less")
+
+    # empirical FSD check (no crossing)
+    grid = np.sort(np.unique(np.r_[xa, xb]))
+    Fa = np.searchsorted(np.sort(xa), grid, side="right") / len(xa)
+    Fb = np.searchsorted(np.sort(xb), grid, side="right") / len(xb)
+    no_cross = np.all(Fa <= Fb + 1e-12)
+
+    return {
+        "ks_stat": ks.statistic,
+        "p_value": ks.pvalue,
+        "fsd_empirical": bool(no_cross),
+        "reject_at_alpha": ks.pvalue < alpha,
+    }
+
+
+def pairwise_fsd_test(
+    metrics_dict, metric_key, last_n=5, alpha=0.05, return_format="dataframe"
+):
+    """
+    Perform pairwise FSD tests between all policies using data from box plot statistics.
+
+    Args:
+        metrics_dict: either all_metrics or agg_metrics from collect_metrics()
+        metric_key: which metric to test (e.g., 'num_offense', 'num_treated')
+        last_n: number of last episodes to sum over (default: 5)
+        alpha: significance level for hypothesis test (default: 0.05)
+        return_format: "dataframe" or "dict" (default: "dataframe")
+
+    Returns:
+        If return_format="dataframe":
+            A pandas DataFrame with MultiIndex columns containing:
+            - p_value: p-value matrix (row dominates column if p < alpha)
+            - ks_stat: KS statistic matrix
+            - fsd_empirical: empirical FSD matrix (True if row dominates column)
+            - mean_diff: mean difference matrix (row - column, negative means row is better)
+
+        If return_format="dict":
+            Dictionary with keys 'p_value', 'ks_stat', 'fsd_empirical', 'mean_diff',
+            each containing a DataFrame with policies as both rows and columns.
+
+    Example:
+        >>> results = pairwise_fsd_test(all_metrics, 'num_offense', last_n=5)
+        >>> # Check if 'high-risk' dominates 'null' at alpha=0.05
+        >>> results['p_value'].loc['high-risk', 'null'] < 0.05
+    """
+    # Collect data for each policy (same as box plot)
+    policy_data = {}
+
+    for k, metrics in metrics_dict.items():
+        if metric_key not in metrics:
+            continue
+
+        data = metrics[metric_key]
+
+        # Auto-detect format and compute sum over last_n episodes per repetition
+        if isinstance(data, dict) and "mean" in data:
+            # agg_metrics format: only have aggregated stats
+            vals = np.array([np.sum(data["mean"][-last_n:])])
+        elif isinstance(data, np.ndarray):
+            if data.ndim == 2:
+                # all_metrics format (matrix: repeats x episodes)
+                # Sum last_n episodes for each repetition
+                vals = np.sum(data[:, -last_n:], axis=1)
+            else:
+                # 1D array (single run)
+                vals = np.array([np.sum(data[-last_n:])])
+        else:
+            continue
+
+        policy_data[k] = vals
+
+    if not policy_data:
+        print(f"No data found for metric '{metric_key}'")
+        return None
+
+    policies = list(policy_data.keys())
+    n_policies = len(policies)
+
+    # Initialize result matrices
+    p_values = np.full((n_policies, n_policies), np.nan)
+    ks_stats = np.full((n_policies, n_policies), np.nan)
+    fsd_empirical = np.full((n_policies, n_policies), False)
+    mean_diffs = np.full((n_policies, n_policies), np.nan)
+
+    # Perform pairwise tests
+    for i, policy_a in enumerate(policies):
+        for j, policy_b in enumerate(policies):
+            if i == j:
+                # Diagonal: policy compared to itself
+                p_values[i, j] = 1.0
+                ks_stats[i, j] = 0.0
+                fsd_empirical[i, j] = True
+                mean_diffs[i, j] = 0.0
+            else:
+                xa = policy_data[policy_a]
+                xb = policy_data[policy_b]
+
+                # Test if policy_a dominates policy_b
+                result = fsd_test(xa, xb, alpha=alpha)
+                p_values[i, j] = result["p_value"]
+                ks_stats[i, j] = result["ks_stat"]
+                fsd_empirical[i, j] = result["fsd_empirical"]
+                mean_diffs[i, j] = np.mean(xa) - np.mean(xb)
+
+    # Create DataFrames with policy names as index and columns
+    p_value_df = pd.DataFrame(p_values, index=policies, columns=policies)
+    ks_stat_df = pd.DataFrame(ks_stats, index=policies, columns=policies)
+    fsd_empirical_df = pd.DataFrame(fsd_empirical, index=policies, columns=policies)
+    mean_diff_df = pd.DataFrame(mean_diffs, index=policies, columns=policies)
+
+    if return_format == "dict":
+        return {
+            "p_value": p_value_df,
+            "ks_stat": ks_stat_df,
+            "fsd_empirical": fsd_empirical_df,
+            "mean_diff": mean_diff_df,
+        }
+    else:
+        # Return as MultiIndex DataFrame
+        result_df = pd.concat(
+            [p_value_df, ks_stat_df, fsd_empirical_df, mean_diff_df],
+            keys=["p_value", "ks_stat", "fsd_empirical", "mean_diff"],
+            axis=1,
+        )
+        return result_df
+
+
+def plot_pairwise_fsd_heatmap(
+    pairwise_results,
+    metric="p_value",
+    alpha=0.05,
+    output_path=None,
+    title=None,
+    figsize=(10, 8),
+    cmap="RdYlGn_r",
+    annot=True,
+):
+    """
+    Plot a heatmap of pairwise FSD test results.
+
+    Args:
+        pairwise_results: output from pairwise_fsd_test()
+        metric: which metric to plot - "p_value", "ks_stat", "fsd_empirical", or "mean_diff"
+        alpha: significance level for marking significant results (default: 0.05)
+        output_path: if provided, save figure to this path
+        title: plot title (auto-generated if None)
+        figsize: figure size (width, height) in inches
+        cmap: colormap for heatmap (default: "RdYlGn_r")
+        annot: if True, annotate cells with values (default: True)
+
+    Returns:
+        matplotlib figure object
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    # Extract the requested metric
+    if isinstance(pairwise_results, pd.DataFrame):
+        # MultiIndex format
+        if metric in pairwise_results.columns.get_level_values(0):
+            data = pairwise_results[metric]
+        else:
+            raise ValueError(f"Metric '{metric}' not found in results")
+    elif isinstance(pairwise_results, dict):
+        # Dict format
+        if metric in pairwise_results:
+            data = pairwise_results[metric]
+        else:
+            raise ValueError(f"Metric '{metric}' not found in results")
+    else:
+        raise ValueError("pairwise_results must be DataFrame or dict")
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Generate title if not provided
+    if title is None:
+        if metric == "p_value":
+            title = f"Pairwise FSD Test p-values (row dominates column if p < {alpha})"
+        elif metric == "ks_stat":
+            title = "Pairwise KS Test Statistics"
+        elif metric == "fsd_empirical":
+            title = "Empirical FSD (True = row dominates column)"
+        elif metric == "mean_diff":
+            title = "Mean Difference (row - column, negative = row is better)"
+
+    # Plot heatmap
+    if metric == "fsd_empirical":
+        # Boolean data - use discrete colormap
+        sns.heatmap(
+            data.astype(int),
+            annot=annot,
+            fmt="d",
+            cmap="RdYlGn",
+            cbar_kws={"label": "Dominates"},
+            ax=ax,
+            linewidths=0.5,
+            linecolor="gray",
+            vmin=0,
+            vmax=1,
+        )
+    elif metric == "p_value":
+        # p-values - mark significant results
+        sns.heatmap(
+            data,
+            annot=annot,
+            fmt=".3f",
+            cmap=cmap,
+            cbar_kws={"label": "p-value"},
+            ax=ax,
+            linewidths=0.5,
+            linecolor="gray",
+            vmin=0,
+            vmax=1,
+        )
+        # Add significance markers
+        if annot:
+            for i in range(len(data)):
+                for j in range(len(data.columns)):
+                    if i != j and data.iloc[i, j] < alpha:
+                        ax.text(
+                            j + 0.5,
+                            i + 0.7,
+                            "*",
+                            ha="center",
+                            va="center",
+                            color="black",
+                            fontsize=16,
+                            fontweight="bold",
+                        )
+    else:
+        # Continuous data
+        sns.heatmap(
+            data,
+            annot=annot,
+            fmt=".3f",
+            cmap=cmap,
+            cbar_kws={"label": metric},
+            ax=ax,
+            linewidths=0.5,
+            linecolor="gray",
+        )
+
+    ax.set_title(title, fontsize=12, pad=10)
+    ax.set_xlabel("Policy (column)", fontsize=10)
+    ax.set_ylabel("Policy (row)", fontsize=10)
+
+    # Rotate labels for readability
+    plt.xticks(rotation=45, ha="right")
+    plt.yticks(rotation=0)
+
+    plt.tight_layout()
+
+    # Save if output path provided
+    if output_path:
+        if output_path.endswith((".pgf", ".tex")):
+            plt.savefig(output_path, bbox_inches="tight", backend="pgf")
+        else:
+            plt.savefig(output_path, bbox_inches="tight", dpi=150)
+        print(f"Saved to {output_path}")
+
+    plt.show()
+
+    return fig
+
+
 def plot_policy_legend(
     policy_names=None,
     output_path="/tmp/legend.pdf",

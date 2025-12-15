@@ -37,7 +37,7 @@ class SimulationSetup:
     p_freeze = 0
     T_max = 30000
     treatment_capacity = 50
-    treatment_effect = 1.0
+    treatment_effect = 0.5
     """@note: try not change to 1
     1: vital for memory need about 5G RAM
     2: 1 will be very slow to converge (need many epochs))
