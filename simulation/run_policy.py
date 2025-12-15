@@ -16,8 +16,8 @@ from simulation_summary import *
 
 # python run_policy.py low_age_low_prev 3
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python run_policy.py <policy_name> <repeat>")
+    if len(sys.argv) != 4:
+        print("Usage: python run_policy.py <policy_name> <repeat> <repeat_start>")
         # show all policy names
         print("Available policies:")
         for policy in tests.keys():
@@ -25,5 +25,5 @@ if __name__ == "__main__":
         sys.exit(1)
     policy_name = sys.argv[1]
     repeat = int(sys.argv[2])
-    _sim = run_name(policy_name, repeat=repeat)
-    dump_metrics_to_h5(policy_name, _sim, p_freeze)
+    repeat_start = int(sys.argv[3])
+    run_name(policy_name, repeat=repeat, start=repeat_start)

@@ -80,7 +80,7 @@ def batch_treatment_rule(func):
 
 @batch_treatment_rule
 def treatment_rule_priority(
-    candidates, remaining_capacity, key=None, ascending=False, **kwargs
+    candidates, remaining_capacity, key=None, ascending=False, exclude=None, **kwargs
 ):
     """
     Select individuals by priority (sorted by key).
@@ -89,8 +89,15 @@ def treatment_rule_priority(
         - if `key` is None, select by highest `score`
         - if `ascending`, choose the top-C-smallest individuals
             else choose the top-C-largest individuals
+        - if `exclude` is provided, filter out individuals where exclude(row) is True
     """
     cc = candidates.copy()
+
+    # Apply exclusion filter if provided
+    if exclude is not None:
+        mask = cc.apply(lambda row: not exclude(row), axis=1)
+        cc = cc[mask]
+
     key = "score" if key is None else key
     to_compute = kwargs.get("to_compute", None)
     if to_compute is not None:
@@ -105,3 +112,45 @@ def treatment_rule_random(candidates, remaining_capacity, **kwargs):
     """
     n = min(remaining_capacity, len(candidates))
     return candidates.sample(n).index
+
+
+@batch_treatment_rule
+def treatment_rule_priority_fluid(
+    candidates, remaining_capacity, prob_vector, state_column="state", **kwargs
+):
+    """
+    Priority policy, but may not exhaust the capacity.
+        The policy is motivated by the fluid model, where we preset a probability vector for
+        prob_vector = {state s: probability p_s}, s \in S
+    and each person (in state s) is assigned according to a coin flip with the probability vector.
+
+    Args:
+        candidates: DataFrame of qualifying individuals not yet in treatment
+        remaining_capacity: maximum number of individuals to select
+        prob_vector: dict mapping state tuple -> probability (0 to 1)
+        state_column: column name containing the state (default "state")
+
+    Returns:
+        indices of selected individuals (may be fewer than remaining_capacity)
+    """
+    selected = []
+
+    for idx, row in candidates.iterrows():
+        if len(selected) >= remaining_capacity:
+            break
+
+        # Get state as tuple
+        state = row[state_column]
+        if hasattr(state, "value"):
+            state_key = tuple(state.value)
+        else:
+            state_key = tuple(state) if hasattr(state, "__iter__") else (state,)
+
+        # Look up probability for this state (default 0 if not in prob_vector)
+        prob = prob_vector.get(state_key, 0.0)
+
+        # Coin flip with probability
+        if np.random.random() < prob:
+            selected.append(idx)
+
+    return selected

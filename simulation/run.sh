@@ -1,0 +1,1 @@
+cat cmd.sh | xargs -I {} -P 4 bash -c "{}"

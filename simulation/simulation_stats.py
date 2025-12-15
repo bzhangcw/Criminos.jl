@@ -1019,4 +1019,214 @@ def evaluation_metrics(results_df):
     for k in metrics:
         metrics[k] = np.array(metrics[k])
 
+    # Save treatment decisions per episode (flattened for HDF5 storage)
+    # Collect per-episode arrays
+    index_list = []
+    tau_list = []
+    tau_rel_list = []
+    lengths = []
+
+    for df in results_df:
+        # Index is state tuple - convert to 2D array (n_states x n_dims)
+        idx_arr = np.array(
+            [list(i) if hasattr(i, "__iter__") else [i] for i in df.index]
+        )
+        tau = df["tau"].values if "tau" in df.columns else np.zeros(len(df))
+        tau_rel = df["tau_rel"].values if "tau_rel" in df.columns else np.zeros(len(df))
+        index_list.append(idx_arr)
+        tau_list.append(tau)
+        tau_rel_list.append(tau_rel)
+        lengths.append(len(df))
+
+    # Flatten into arrays for storage
+    metrics["treatment_index_flat"] = (
+        np.vstack(index_list) if index_list else np.array([])
+    )  # shape: (total_states, n_dims)
+    metrics["treatment_tau_flat"] = (
+        np.concatenate(tau_list) if tau_list else np.array([])
+    )
+    metrics["treatment_tau_rel_flat"] = (
+        np.concatenate(tau_rel_list) if tau_rel_list else np.array([])
+    )
+    metrics["treatment_lengths"] = np.array(
+        lengths
+    )  # to reconstruct per-episode arrays
+
     return metrics
+
+
+def recover_treatment_decision_as_df(metrics, rep=None):
+    """
+    Recover treatment decisions as a DataFrame with MultiIndex.
+
+    Args:
+        metrics: dict from evaluation_metrics() or all_metrics[policy_name]
+        rep: repetition index (required if metrics has multiple reps, i.e. from all_metrics)
+
+    Returns:
+        pd.DataFrame with columns ['tau', 'tau_rel'] and MultiIndex (state, p)
+        If multiple reps and rep=None, includes 'rep' in the index: (rep, state, p)
+    """
+    import pandas as pd
+
+    index_flat = metrics["treatment_index_flat"]
+    tau_flat = metrics["treatment_tau_flat"]
+    tau_rel_flat = metrics["treatment_tau_rel_flat"]
+    lengths = metrics["treatment_lengths"]
+
+    # Check if this is multi-rep data (list of arrays) or single-rep (single array)
+    is_multi_rep = isinstance(lengths, list)
+
+    if is_multi_rep:
+        if rep is not None:
+            # Extract single repetition
+            index_flat = index_flat[rep]
+            tau_flat = tau_flat[rep]
+            tau_rel_flat = tau_rel_flat[rep]
+            lengths = lengths[rep]
+        else:
+            # Combine all reps with rep index
+            dfs = []
+            for r in range(len(lengths)):
+                idx = index_flat[r]
+                tau = tau_flat[r]
+                tau_rel = tau_rel_flat[r]
+                lens = lengths[r]
+
+                states = [tuple(row) for row in idx]
+                episodes = np.repeat(np.arange(len(lens)), lens)
+                reps = np.full(len(states), r)
+
+                multi_idx = pd.MultiIndex.from_arrays(
+                    [reps, states, episodes], names=["rep", "state", "p"]
+                )
+                df = pd.DataFrame({"tau": tau, "tau_rel": tau_rel}, index=multi_idx)
+                dfs.append(df)
+            return pd.concat(dfs)
+
+    # Single rep case
+    states = [tuple(row) for row in index_flat]
+    episodes = np.repeat(np.arange(len(lengths)), lengths)
+
+    multi_idx = pd.MultiIndex.from_arrays([states, episodes], names=["state", "p"])
+    df = pd.DataFrame({"tau": tau_flat, "tau_rel": tau_rel_flat}, index=multi_idx)
+
+    return df
+
+
+def compute_equilibrium_treatment_stats(all_metrics, metric_key="tau", last_n=10):
+    """
+    Compute equilibrium average of a metric over the last N episodes across all reps.
+    Only considers states where bool_in_probation == 1 (last index level), then drops it.
+
+    Args:
+        all_metrics: dict from read_metrics_from_h5 containing treatment fields:
+            - treatment_index_flat: list of arrays (one per rep) with state tuples
+            - treatment_tau_flat: list of arrays (one per rep)
+            - treatment_tau_rel_flat: list of arrays (one per rep)
+            - treatment_lengths: list of arrays (one per rep) with episode lengths
+        metric_key: "tau" or "tau_rel" (default "tau")
+        last_n: number of episodes from the end to average over (default 10)
+
+    Returns:
+        (df_mean, df_std): two DataFrames with:
+            - rows = age (second dim of state)
+            - columns = number of offenses (first dim of state)
+            - df_mean: normalized so all cells sum to 1
+            - df_std: each cell scaled by its mean value (coefficient of variation)
+    """
+    index_flat_list = all_metrics["treatment_index_flat"]
+    tau_flat_list = all_metrics["treatment_tau_flat"]
+    tau_rel_flat_list = all_metrics["treatment_tau_rel_flat"]
+    lengths_list = all_metrics["treatment_lengths"]
+
+    n_reps = len(lengths_list)
+
+    # Collect per-state data across all reps
+    # state_data[state] = [val1, val2, ...] where each entry is one rep's average
+    state_data = defaultdict(list)
+
+    for rep in range(n_reps):
+        index_flat = index_flat_list[rep]
+        tau_flat = tau_flat_list[rep]
+        tau_rel_flat = tau_rel_flat_list[rep]
+        lengths = lengths_list[rep]
+
+        # Select metric
+        if metric_key == "tau":
+            metric_flat = tau_flat
+        else:
+            metric_flat = tau_rel_flat
+
+        n_episodes = len(lengths)
+        if n_episodes < last_n:
+            ep_start = 0
+        else:
+            ep_start = n_episodes - last_n
+
+        # Compute cumulative indices to slice into flat arrays
+        cum_lengths = np.cumsum(lengths)
+        start_indices = np.concatenate([[0], cum_lengths[:-1]])
+
+        # Collect data for last_n episodes, grouped by state (excluding bool_in_probation)
+        state_metric = defaultdict(list)
+
+        for ep in range(ep_start, n_episodes):
+            start_idx = int(start_indices[ep])
+            end_idx = int(cum_lengths[ep])
+
+            for i in range(start_idx, end_idx):
+                state_tuple = tuple(index_flat[i])
+                # Filter: only in probation (last index == 1)
+                if state_tuple[-1] != 1:
+                    continue
+                # Drop last index level (bool_in_probation)
+                state_key = state_tuple[:-1]
+                state_metric[state_key].append(metric_flat[i])
+
+        # Average over episodes for this rep, store per state
+        for state_key in state_metric:
+            state_data[state_key].append(np.mean(state_metric[state_key]))
+
+    # Build result: rows = age, columns = offenses
+    # state_key = (offenses, age)
+    offenses_set = set()
+    age_set = set()
+    for state_key in state_data:
+        offenses_set.add(state_key[0])
+        age_set.add(state_key[1])
+
+    offenses_sorted = sorted(offenses_set)
+    age_sorted = sorted(age_set)
+
+    # Create mean and std matrices
+    mean_data = {off: {} for off in offenses_sorted}
+    std_data = {off: {} for off in offenses_sorted}
+
+    for state_key, values in state_data.items():
+        offenses, age = state_key
+        arr = np.array(values)
+        mean_data[offenses][age] = np.mean(arr)
+        std_data[offenses][age] = np.std(arr)
+
+    # Build DataFrames: rows = age, columns = offenses
+    df_mean_raw = pd.DataFrame(
+        mean_data, index=age_sorted, columns=offenses_sorted
+    ).fillna(0)
+    df_std_raw = pd.DataFrame(
+        std_data, index=age_sorted, columns=offenses_sorted
+    ).fillna(0)
+
+    # Normalize mean_df so all cells sum to 1
+    total_sum = df_mean_raw.values.sum()
+    df_mean = df_mean_raw / total_sum if total_sum > 0 else df_mean_raw
+
+    # Scale std_df by mean values (coefficient of variation)
+    df_std = df_std_raw / df_mean_raw.replace(0, np.nan)
+
+    df_mean.index.name = "age"
+    df_mean.columns.name = "offenses"
+    df_std.index.name = "age"
+    df_std.columns.name = "offenses"
+
+    return df_mean, df_std, df_mean_raw, df_std_raw

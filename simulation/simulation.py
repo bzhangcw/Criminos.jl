@@ -46,24 +46,6 @@ class EventType(str, Enum):
     EVENT_REVOKE = "revok"
 
 
-DEFAULT_MAX_RETURNS = 3
-# @note: by c.z (2025-12-10)
-# qualifying for treatment:
-#   - the individual has not left yet
-#   - the individual is in probation
-DEFAULT_QUALIFYING_FOR_TREATMENT = (
-    "bool_left == 0 "
-    + " & bool_in_probation == 1"
-    + " & bool_can_be_treated == 1"
-    + " & has_been_treated == 0"
-)
-DEFAULT_STR_CURRENT_ENROLL = "bool_left == 0 & bool_treat == 1 & bool_in_probation == 1"
-DEFAULT_BOOL_RETURN_CAN_BE_TREATED = (
-    1  # if you are a returning agent, you can be treated
-)
-DEFAULT_BOOL_KEEP_TREATMENT_EFFECT = True
-
-
 class ReasonToLeave(IntEnum):
     END_OF_PROCESS = 1
     RETURNING_AGENT = 2
@@ -71,7 +53,7 @@ class ReasonToLeave(IntEnum):
     TOO_MANY_RETURNS = 4
 
 
-from simulation_extra import *
+from simulation_regression import *
 from simulation_treatment import (
     treatment_null,
     treatment_rule_priority,
@@ -81,7 +63,10 @@ from simulation_stats import (
     summarize_trajectory_bak,
     summarize_trajectory,
     evaluation_metrics,
+    recover_treatment_decision_as_df,
 )
+import simulation_treatment as simt
+import simulation_stats as sims
 
 
 def encode_priority(t):
@@ -391,9 +376,10 @@ class Simulator(object):
         func_treatment=None,
         func_treatment_kwargs={},
         # ----------------------------------------------------------------------
-        str_qualifying_for_treatment=DEFAULT_QUALIFYING_FOR_TREATMENT,
-        str_current_enroll=DEFAULT_STR_CURRENT_ENROLL,
-        bool_return_can_be_treated=DEFAULT_BOOL_RETURN_CAN_BE_TREATED,
+        str_qualifying_for_treatment="",
+        str_current_enroll="",
+        bool_return_can_be_treated=1,
+        max_returns=3,
     ):
         """
         Run the simulation for a given population.
@@ -483,6 +469,7 @@ class Simulator(object):
 
         self.t_dfc = t_dfc = []
         self.t_dfi = t_dfi = []
+        self.t_dftau = t_dftau = []
         self.traj_results = []
 
         # initialize the community score
@@ -708,7 +695,7 @@ class Simulator(object):
                 )
                 _bool_should_be_incarcerated = _bool_is_incarceration_event or (
                     _bool_off_probation  # it is off probation and returned too many times
-                    and dfi.loc[idx, "return_times"] >= DEFAULT_MAX_RETURNS
+                    and dfi.loc[idx, "return_times"] >= max_returns
                 )
                 if _bool_should_be_incarcerated:
                     _incarceration = self.__default_incarceration(dfi.loc[idx], t)
@@ -871,12 +858,17 @@ class Simulator(object):
                             file=fo,
                         )
 
-                # keep trajectory
-                dfc_sorted = dfc.assign(snap=p).reset_index()
-                dfi_sorted = dfi.assign(snap=p).reset_index()
                 if self.bool_keep_full_trajectory:
+                    # keep trajectory
+                    dfc_sorted = dfc.assign(snap=p).reset_index()
+                    dfi_sorted = dfi.assign(snap=p).reset_index()
                     t_dfc.append(dfc_sorted)
                     t_dfi.append(dfi_sorted.reindex(sorted(dfi_sorted.columns), axis=1))
+                    t_dftau.append(
+                        dfi.loc[idx_selected, sorted(dfi.columns)]
+                        .assign(snap=p)
+                        .reset_index()
+                    )
 
                 p = _episode
 
@@ -966,9 +958,7 @@ class Simulator(object):
 # ------------------------------------------------------------------------------
 
 
-def revert_treatment(
-    dfi, idx, t, bool_keep_treatment_effect=DEFAULT_BOOL_KEEP_TREATMENT_EFFECT, **kwargs
-):
+def revert_treatment(dfi, idx, t, bool_keep_treatment_effect=True, **kwargs):
     is_treated = dfi.loc[idx, "bool_treat"]
     dfi.loc[idx, "treat_end"] = t if is_treated == 1.0 else 0.0
     dfi.loc[idx, "bool_treat"] = 0.0

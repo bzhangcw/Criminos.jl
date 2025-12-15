@@ -163,20 +163,19 @@ rbgs = [
 juliacmaps = ListedColormap(rbgs)
 # Configure rcParams to use LaTeX and serif font
 colors = juliacmaps(np.linspace(0, 1, len(rbgs)))  # Get all colors from the colormap
-plt.rcParams["axes.prop_cycle"] = plt.cycler(color=colors)
-
-plt.rcParams.update(
-    {
-        "text.usetex": True,  # Use LaTeX for text rendering
-        "font.family": "serif",  # Use serif font family
-        "font.serif": [
-            "Computer Modern Roman"
-        ],  # Specify specific serif font (default LaTeX font)
-        "font.size": 18,  # General font size
-        "axes.labelsize": 12,  # Font size for labels
-        "legend.fontsize": 18,  # Font size for legend
-        "xtick.labelsize": 18,  # Font size for x-axis ticks
-        "ytick.labelsize": 18,  # Font size for y-axis ticks
-        # "image.cmap": "juliacmaps",  # Set custom colormap
-    }
-)
+# plt.rcParams["axes.prop_cycle"] = plt.cycler(color=colors)
+# plt.rcParams.update(
+#     {
+#         "text.usetex": True,  # Use LaTeX for text rendering
+#         "font.family": "serif",  # Use serif font family
+#         "font.serif": [
+#             "Computer Modern Roman"
+#         ],  # Specify specific serif font (default LaTeX font)
+#         "font.size": 18,  # General font size
+#         "axes.labelsize": 12,  # Font size for labels
+#         "legend.fontsize": 18,  # Font size for legend
+#         "xtick.labelsize": 18,  # Font size for x-axis ticks
+#         "ytick.labelsize": 18,  # Font size for y-axis ticks
+#         # "image.cmap": "juliacmaps",  # Set custom colormap
+#     }
+# )
