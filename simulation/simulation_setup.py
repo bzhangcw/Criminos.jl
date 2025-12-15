@@ -33,7 +33,7 @@ class SimulationSetup:
     """Configuration class for simulation parameters."""
 
     # Default values
-    p_length = 30
+    p_length = 40
     p_freeze = 0
     T_max = 24000
     treatment_capacity = 50
