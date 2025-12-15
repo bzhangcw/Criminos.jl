@@ -611,6 +611,11 @@ def fsd_test(xa, xb, alpha=0.05):
     """
     Test if xa first-order stochastically dominates xb (xa is better, i.e., lower values).
 
+    For lower-is-better metrics (like number of offenses):
+    - xa dominates xb if F_a(x) >= F_b(x) for all x
+    - Meaning: xa has more probability mass on lower (better) values
+    - Equivalently: the CDF of xa is always above or equal to the CDF of xb
+
     Args:
         xa: array of values for policy A (lower is better)
         xb: array of values for policy B (lower is better)
@@ -619,20 +624,24 @@ def fsd_test(xa, xb, alpha=0.05):
     Returns:
         dict with keys:
             - ks_stat: KS test statistic
-            - p_value: p-value for one-sided KS test
-            - fsd_empirical: True if xa <= xb everywhere (empirical FSD)
+            - p_value: p-value for one-sided KS test (H1: xa dominates xb)
+            - fsd_empirical: True if F_a(x) >= F_b(x) everywhere (empirical FSD)
             - reject_at_alpha: True if we reject null at given alpha
     """
     xa, xb = np.asarray(xa), np.asarray(xb)
 
-    # one-sided KS: H1: F_a <= F_b (xa stochastically dominates xb)
-    ks = ks_2samp(xa, xb, alternative="less")
+    # For lower-is-better: xa dominates xb if F_a >= F_b
+    # KS test with alternative='greater' tests if CDF of xa is above CDF of xb
+    # This means xa has more mass on lower values (is better)
+    ks = ks_2samp(xa, xb, alternative="greater")
 
-    # empirical FSD check (no crossing)
+    # empirical FSD check: F_a(x) >= F_b(x) for all x
+    # (xa's CDF should be above or equal to xb's CDF everywhere)
     grid = np.sort(np.unique(np.r_[xa, xb]))
     Fa = np.searchsorted(np.sort(xa), grid, side="right") / len(xa)
     Fb = np.searchsorted(np.sort(xb), grid, side="right") / len(xb)
-    no_cross = np.all(Fa <= Fb + 1e-12)
+    # xa dominates xb if Fa >= Fb everywhere (more mass on lower values)
+    no_cross = np.all(Fa >= Fb - 1e-12)
 
     return {
         "ks_stat": ks.statistic,
@@ -752,145 +761,6 @@ def pairwise_fsd_test(
             axis=1,
         )
         return result_df
-
-
-def plot_pairwise_fsd_heatmap(
-    pairwise_results,
-    metric="p_value",
-    alpha=0.05,
-    output_path=None,
-    title=None,
-    figsize=(10, 8),
-    cmap="RdYlGn_r",
-    annot=True,
-):
-    """
-    Plot a heatmap of pairwise FSD test results.
-
-    Args:
-        pairwise_results: output from pairwise_fsd_test()
-        metric: which metric to plot - "p_value", "ks_stat", "fsd_empirical", or "mean_diff"
-        alpha: significance level for marking significant results (default: 0.05)
-        output_path: if provided, save figure to this path
-        title: plot title (auto-generated if None)
-        figsize: figure size (width, height) in inches
-        cmap: colormap for heatmap (default: "RdYlGn_r")
-        annot: if True, annotate cells with values (default: True)
-
-    Returns:
-        matplotlib figure object
-    """
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-
-    # Extract the requested metric
-    if isinstance(pairwise_results, pd.DataFrame):
-        # MultiIndex format
-        if metric in pairwise_results.columns.get_level_values(0):
-            data = pairwise_results[metric]
-        else:
-            raise ValueError(f"Metric '{metric}' not found in results")
-    elif isinstance(pairwise_results, dict):
-        # Dict format
-        if metric in pairwise_results:
-            data = pairwise_results[metric]
-        else:
-            raise ValueError(f"Metric '{metric}' not found in results")
-    else:
-        raise ValueError("pairwise_results must be DataFrame or dict")
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=figsize)
-
-    # Generate title if not provided
-    if title is None:
-        if metric == "p_value":
-            title = f"Pairwise FSD Test p-values (row dominates column if p < {alpha})"
-        elif metric == "ks_stat":
-            title = "Pairwise KS Test Statistics"
-        elif metric == "fsd_empirical":
-            title = "Empirical FSD (True = row dominates column)"
-        elif metric == "mean_diff":
-            title = "Mean Difference (row - column, negative = row is better)"
-
-    # Plot heatmap
-    if metric == "fsd_empirical":
-        # Boolean data - use discrete colormap
-        sns.heatmap(
-            data.astype(int),
-            annot=annot,
-            fmt="d",
-            cmap="RdYlGn",
-            cbar_kws={"label": "Dominates"},
-            ax=ax,
-            linewidths=0.5,
-            linecolor="gray",
-            vmin=0,
-            vmax=1,
-        )
-    elif metric == "p_value":
-        # p-values - mark significant results
-        sns.heatmap(
-            data,
-            annot=annot,
-            fmt=".3f",
-            cmap=cmap,
-            cbar_kws={"label": "p-value"},
-            ax=ax,
-            linewidths=0.5,
-            linecolor="gray",
-            vmin=0,
-            vmax=1,
-        )
-        # Add significance markers
-        if annot:
-            for i in range(len(data)):
-                for j in range(len(data.columns)):
-                    if i != j and data.iloc[i, j] < alpha:
-                        ax.text(
-                            j + 0.5,
-                            i + 0.7,
-                            "*",
-                            ha="center",
-                            va="center",
-                            color="black",
-                            fontsize=16,
-                            fontweight="bold",
-                        )
-    else:
-        # Continuous data
-        sns.heatmap(
-            data,
-            annot=annot,
-            fmt=".3f",
-            cmap=cmap,
-            cbar_kws={"label": metric},
-            ax=ax,
-            linewidths=0.5,
-            linecolor="gray",
-        )
-
-    ax.set_title(title, fontsize=12, pad=10)
-    ax.set_xlabel("Policy (column)", fontsize=10)
-    ax.set_ylabel("Policy (row)", fontsize=10)
-
-    # Rotate labels for readability
-    plt.xticks(rotation=45, ha="right")
-    plt.yticks(rotation=0)
-
-    plt.tight_layout()
-
-    # Save if output path provided
-    if output_path:
-        if output_path.endswith((".pgf", ".tex")):
-            plt.savefig(output_path, bbox_inches="tight", backend="pgf")
-        else:
-            plt.savefig(output_path, bbox_inches="tight", dpi=150)
-        print(f"Saved to {output_path}")
-
-    plt.show()
-
-    return fig
 
 
 def plot_policy_legend(
