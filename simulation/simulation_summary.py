@@ -240,39 +240,43 @@ def _print_directory_tree(
         if os.path.isfile(os.path.join(directory, e)) and not e.startswith(".")
     ]
 
-    # Filter directories if we're at the root level and have loaded_policies
+    # Filter directories: only show loaded policies at root level
     if current_depth == 0 and loaded_policies is not None:
-        # Show only loaded policies
+        # Show only loaded policies at root level
         dirs = [d for d in all_dirs if d in loaded_policies]
-        # Check if there are other directories
-        has_others = len(all_dirs) > len(dirs)
-    else:
+
+        # Only print directories (skip files completely)
+        for i, d in enumerate(dirs):
+            is_last_dir = i == len(dirs) - 1
+            connector = "└── " if is_last_dir else "├── "
+            print(f"{prefix}{connector}{d}/")
+
+            extension = "    " if is_last_dir else "│   "
+            _print_directory_tree(
+                os.path.join(directory, d),
+                prefix + extension,
+                max_depth,
+                current_depth + 1,
+                loaded_policies,
+            )
+    elif current_depth > 0:
+        # At deeper levels (inside policy directories), show all subdirectories
         dirs = all_dirs
-        has_others = False
 
-    files = all_files
+        # Only print directories (skip files completely)
+        for i, d in enumerate(dirs):
+            is_last_dir = i == len(dirs) - 1
+            connector = "└── " if is_last_dir else "├── "
+            print(f"{prefix}{connector}{d}/")
 
-    # Print directories first
-    for i, d in enumerate(dirs):
-        is_last_dir = (i == len(dirs) - 1) and len(files) == 0 and not has_others
-        connector = "└── " if is_last_dir else "├── "
-        print(f"{prefix}{connector}{d}/")
-
-        extension = "    " if is_last_dir else "│   "
-        _print_directory_tree(
-            os.path.join(directory, d),
-            prefix + extension,
-            max_depth,
-            current_depth + 1,
-            loaded_policies,
-        )
-
-    # Print files (only at depth > 0, or if no loaded_policies filter)
-    if current_depth > 0 or loaded_policies is None:
-        for i, f in enumerate(files):
-            is_last = i == len(files) - 1
-            connector = "└── " if is_last else "├── "
-            print(f"{prefix}{connector}{f}")
+            extension = "    " if is_last_dir else "│   "
+            _print_directory_tree(
+                os.path.join(directory, d),
+                prefix + extension,
+                max_depth,
+                current_depth + 1,
+                loaded_policies,
+            )
 
 
 # ------------------------------------------------------------
