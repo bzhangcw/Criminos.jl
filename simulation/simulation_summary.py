@@ -353,10 +353,10 @@ def plot_metric(
     start=20,
     window=10,
     output_path=None,
+    bool_acc_mean=True,
 ):
     """
     Plot a single metric for all simulations with confidence intervals.
-    Computes running sum over a window before plotting.
 
     Args:
         metrics_dict: either all_metrics or agg_metrics from collect_metrics()
@@ -366,8 +366,10 @@ def plot_metric(
         title: optional plot title
         show_ci: whether to show confidence interval (min/max band)
         start: starting episode index (skip first N episodes)
-        window: window size for running sum (default 10)
+        window: window size for running sum (only used if bool_acc_mean=False, default 10)
         output_path: path to save PDF (default: /tmp/{metric_key}-trend.pdf)
+        bool_acc_mean: if True, compute cumulative mean (window not used);
+                       if False, compute running sum over window (default True)
     """
     fig = go.Figure()
     import matplotlib.colors as mcolors
@@ -376,6 +378,10 @@ def plot_metric(
         """Compute running sum with window w using convolution."""
         kernel = np.ones(w)
         return np.convolve(arr, kernel, mode="valid")
+
+    def cumulative_mean(arr):
+        """Compute cumulative mean: mean from episode 0 to current episode."""
+        return np.cumsum(arr) / np.arange(1, len(arr) + 1)
 
     for i, (k, metrics) in enumerate(metrics_dict.items()):
         if metric_key not in metrics:
@@ -392,35 +398,57 @@ def plot_metric(
 
         # Auto-detect format: agg_metrics has dict with 'mean', all_metrics has ndarray
         if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: apply running sum then slice
-            raw_mean = running_sum(data["mean"], window)
-            raw_std = running_sum(data["std"], window)
-            # Adjust start for window offset
-            adj_start = max(0, start - window + 1)
-            mean_vals = raw_mean[adj_start:]
-            std_vals = raw_std[adj_start:]
+            # agg_metrics format
+            if bool_acc_mean:
+                # Compute cumulative mean
+                raw_mean = cumulative_mean(data["mean"])
+                # For std, use cumulative std approximation
+                raw_std = data["std"] / np.sqrt(np.arange(1, len(data["std"]) + 1))
+                mean_vals = raw_mean[start:]
+                std_vals = raw_std[start:]
+                adj_start = start
+            else:
+                # Apply running sum then slice
+                raw_mean = running_sum(data["mean"], window)
+                raw_std = running_sum(data["std"], window)
+                # Adjust start for window offset
+                adj_start = max(0, start - window + 1)
+                mean_vals = raw_mean[adj_start:]
+                std_vals = raw_std[adj_start:]
             min_vals = np.maximum(mean_vals - 1 * std_vals, 0)
             max_vals = mean_vals + 1 * std_vals
         elif isinstance(data, np.ndarray):
             # all_metrics format (matrix: repeats x episodes)
             if data.ndim == 2:
-                # Apply running sum to each repetition, then compute stats
-                summed = np.array([running_sum(row, window) for row in data])
-                adj_start = max(0, start - window + 1)
-                mean_vals = np.mean(summed[:, adj_start:], axis=0)
-                std_vals = np.std(summed[:, adj_start:], axis=0)
+                if bool_acc_mean:
+                    # Compute cumulative mean for each repetition
+                    cum_means = np.array([cumulative_mean(row) for row in data])
+                    mean_vals = np.mean(cum_means[:, start:], axis=0)
+                    std_vals = np.std(cum_means[:, start:], axis=0)
+                    adj_start = start
+                else:
+                    # Apply running sum to each repetition, then compute stats
+                    summed = np.array([running_sum(row, window) for row in data])
+                    adj_start = max(0, start - window + 1)
+                    mean_vals = np.mean(summed[:, adj_start:], axis=0)
+                    std_vals = np.std(summed[:, adj_start:], axis=0)
                 min_vals = np.maximum(mean_vals - 1.5 * std_vals, 0)
                 max_vals = mean_vals + 1.5 * std_vals
             else:
                 # 1D array (single run)
-                summed = running_sum(data, window)
-                adj_start = max(0, start - window + 1)
-                mean_vals = summed[adj_start:]
+                if bool_acc_mean:
+                    cum_mean = cumulative_mean(data)
+                    mean_vals = cum_mean[start:]
+                    adj_start = start
+                else:
+                    summed = running_sum(data, window)
+                    adj_start = max(0, start - window + 1)
+                    mean_vals = summed[adj_start:]
                 min_vals = max_vals = None
         else:
             continue
 
-        # Episodes start from (start) but account for window offset
+        # Episodes start from (start) or adjusted start
         episodes = np.arange(start, start + len(mean_vals))
 
         # Convert color to rgba with alpha
@@ -505,9 +533,10 @@ def plot_to_tex_equilibrium_box(
     last_n=20,
     output_path="/tmp/fig.pdf",
     show_labels=False,
+    bool_acc_mean=True,
 ):
     """
-    Plot the equilibrium box plot for the given metric using the last N episodes.
+    Plot the equilibrium box plot for the given metric.
 
     Args:
         metrics_dict: either all_metrics or agg_metrics from collect_metrics()
@@ -515,10 +544,12 @@ def plot_to_tex_equilibrium_box(
                     'total_incarcerated', 'total_returns', 'offense_rate', etc.
         ylabel: optional y-axis label (defaults to metric_key)
         title: optional plot title
-        last_n: number of episodes from the end to use for statistics (default 20)
+        last_n: number of episodes from the end to use for sum (only used if bool_acc_mean=False, default 20)
         output_path: path to save the file (default "/tmp/fig.pdf")
                      Supports .pdf, .png, .pgf, or .tex extensions
         show_labels: if True, show policy names on x-axis (default False)
+        bool_acc_mean: if True, compute mean over ALL episodes (last_n ignored);
+                       if False, compute sum over last_n episodes (default True)
     """
 
     # Collect data for box plot: list of (policy_name, flattened_values)
@@ -531,22 +562,36 @@ def plot_to_tex_equilibrium_box(
 
         data = metrics[metric_key]
 
-        # Auto-detect format and compute sum over last_n episodes per repetition
+        # Auto-detect format and compute statistic
         if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: only have aggregated stats, sum of mean over last_n
-            vals = np.array([np.sum(data["mean"][-last_n:])])
+            # agg_metrics format: only have aggregated stats
+            if bool_acc_mean:
+                # Mean over ALL episodes
+                vals = np.array([np.mean(data["mean"])])
+            else:
+                # Sum over last_n episodes
+                vals = np.array([np.sum(data["mean"][-last_n:])])
             box_data.append(vals)
             labels.append(k)
         elif isinstance(data, np.ndarray):
             if data.ndim == 2:
                 # all_metrics format (matrix: repeats x episodes)
-                # Sum last_n episodes for each repetition -> one value per rep
-                vals = np.sum(data[:, -last_n:], axis=1)
+                if bool_acc_mean:
+                    # Mean over ALL episodes for each repetition
+                    vals = np.mean(data, axis=1)
+                else:
+                    # Sum over last_n episodes for each repetition
+                    vals = np.sum(data[:, -last_n:], axis=1)
                 box_data.append(vals)
                 labels.append(k)
             else:
-                # 1D array (single run) - sum gives single value
-                vals = np.array([np.sum(data[-last_n:])])
+                # 1D array (single run)
+                if bool_acc_mean:
+                    # Mean over ALL episodes
+                    vals = np.array([np.mean(data)])
+                else:
+                    # Sum over last_n episodes
+                    vals = np.array([np.sum(data[-last_n:])])
                 box_data.append(vals)
                 labels.append(k)
 
@@ -652,7 +697,12 @@ def fsd_test(xa, xb, alpha=0.05):
 
 
 def pairwise_fsd_test(
-    metrics_dict, metric_key, last_n=5, alpha=0.05, return_format="dataframe"
+    metrics_dict,
+    metric_key,
+    last_n=5,
+    alpha=0.05,
+    return_format="dataframe",
+    bool_acc_mean=True,
 ):
     """
     Perform pairwise FSD tests between all policies using data from box plot statistics.
@@ -660,9 +710,11 @@ def pairwise_fsd_test(
     Args:
         metrics_dict: either all_metrics or agg_metrics from collect_metrics()
         metric_key: which metric to test (e.g., 'num_offense', 'num_treated')
-        last_n: number of last episodes to sum over (default: 5)
+        last_n: number of last episodes to sum over (only used if bool_acc_mean=False, default: 5)
         alpha: significance level for hypothesis test (default: 0.05)
         return_format: "dataframe" or "dict" (default: "dataframe")
+        bool_acc_mean: if True, compute mean over ALL episodes (last_n ignored);
+                       if False, compute sum over last_n episodes (default: True)
 
     Returns:
         If return_format="dataframe":
@@ -690,18 +742,32 @@ def pairwise_fsd_test(
 
         data = metrics[metric_key]
 
-        # Auto-detect format and compute sum over last_n episodes per repetition
+        # Auto-detect format and compute statistic
         if isinstance(data, dict) and "mean" in data:
             # agg_metrics format: only have aggregated stats
-            vals = np.array([np.sum(data["mean"][-last_n:])])
+            if bool_acc_mean:
+                # Mean over ALL episodes
+                vals = np.array([np.mean(data["mean"])])
+            else:
+                # Sum over last_n episodes
+                vals = np.array([np.sum(data["mean"][-last_n:])])
         elif isinstance(data, np.ndarray):
             if data.ndim == 2:
                 # all_metrics format (matrix: repeats x episodes)
-                # Sum last_n episodes for each repetition
-                vals = np.sum(data[:, -last_n:], axis=1)
+                if bool_acc_mean:
+                    # Mean over ALL episodes for each repetition
+                    vals = np.mean(data, axis=1)
+                else:
+                    # Sum over last_n episodes for each repetition
+                    vals = np.sum(data[:, -last_n:], axis=1)
             else:
                 # 1D array (single run)
-                vals = np.array([np.sum(data[-last_n:])])
+                if bool_acc_mean:
+                    # Mean over ALL episodes
+                    vals = np.array([np.mean(data)])
+                else:
+                    # Sum over last_n episodes
+                    vals = np.array([np.sum(data[-last_n:])])
         else:
             continue
 
