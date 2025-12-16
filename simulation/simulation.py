@@ -60,7 +60,6 @@ from simulation_treatment import (
     treatment_rule_random,
 )
 from simulation_stats import (
-    summarize_trajectory_bak,
     summarize_trajectory,
     evaluation_metrics,
     recover_treatment_decision_as_df,
