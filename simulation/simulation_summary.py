@@ -57,7 +57,7 @@ def get_policy_color(policy_name, fallback_idx=0):
 # ------------------------------------------------------------
 # dump / read metrics to / from h5 file (per-rep structure)
 # ------------------------------------------------------------
-def dump_rep_metrics(simulator, output_dir, p_freeze, windowsize=20):
+def dump_rep_metrics(simulator, output_dir, p_freeze):
     """
     Save a single repetition's metrics to {output_dir}/metrics.h5.
 
@@ -65,17 +65,14 @@ def dump_rep_metrics(simulator, output_dir, p_freeze, windowsize=20):
         simulator: a single simulator object
         output_dir: directory to save metrics.h5 (e.g., results/policy_name/0/)
         p_freeze: p_freeze parameter for summarize_trajectory
-        windowsize: windowsize parameter for summarize_trajectory
+        window_for_ratios: window_for_ratios parameter for summarize_trajectory
     """
     import h5py
 
     simulator.summarize(save=False)
     mean_df, results, results_df, results_flow, results_retention = (
         simulator.summarize_trajectory(
-            p_freeze=p_freeze,
-            state_lst_columns=["state_lst"],
-            state_columns=["state"],
-            windowsize=windowsize,
+            p_freeze=p_freeze, state_lst_columns=["state_lst"], state_columns=["state"]
         )
     )
     metrics = simulation.evaluation_metrics(results_df)
@@ -87,6 +84,8 @@ def dump_rep_metrics(simulator, output_dir, p_freeze, windowsize=20):
             f.create_dataset(metric_key, data=values)
 
     print(f"Saved metrics to {filepath}")
+    # also save the dfi as excel file
+    simulator.dfi.to_excel(f"{output_dir}/dfi.xlsx")
 
 
 def read_metrics_from_h5(name, output_dir="results"):
@@ -197,9 +196,9 @@ def load_to_metrics(
     all_metrics[name] = policy_metrics
     agg_metrics[name] = policy_agg
 
-    # Print directory tree if requested
+    # Print directory tree if requested (only for this policy)
     if print_tree:
-        _print_directory_tree(output_dir, loaded_policies=list(all_metrics.keys()))
+        _print_directory_tree(output_dir, loaded_policies=[name])
 
     return all_metrics, agg_metrics
 
@@ -243,45 +242,43 @@ def _print_directory_tree(
         if os.path.isfile(os.path.join(directory, e)) and not e.startswith(".")
     ]
 
-    # Filter directories if we're at the root level and have loaded_policies
+    # Only show loaded policies at root level
     if current_depth == 0 and loaded_policies is not None:
-        # Show only loaded policies
+        # Show only loaded policy names and their subdirectories
         dirs = [d for d in all_dirs if d in loaded_policies]
-        # Check if there are other directories
-        has_others = len(all_dirs) > len(dirs)
-    else:
+
+        for i, d in enumerate(dirs):
+            is_last_dir = i == len(dirs) - 1
+            connector = "└── " if is_last_dir else "├── "
+            print(f"{prefix}{connector}{d}/")
+
+            # Recurse into this policy directory to show its contents
+            extension = "    " if is_last_dir else "│   "
+            _print_directory_tree(
+                os.path.join(directory, d),
+                prefix + extension,
+                max_depth,
+                current_depth + 1,
+                loaded_policies,
+            )
+    elif current_depth > 0:
+        # Inside policy directories, show all subdirectories
         dirs = all_dirs
-        has_others = False
 
-    files = all_files
+        for i, d in enumerate(dirs):
+            is_last_dir = i == len(dirs) - 1
+            connector = "└── " if is_last_dir else "├── "
+            print(f"{prefix}{connector}{d}/")
 
-    # Print directories first
-    for i, d in enumerate(dirs):
-        is_last_dir = (i == len(dirs) - 1) and len(files) == 0 and not has_others
-        connector = "└── " if is_last_dir else "├── "
-        print(f"{prefix}{connector}{d}/")
-
-        extension = "    " if is_last_dir else "│   "
-        _print_directory_tree(
-            os.path.join(directory, d),
-            prefix + extension,
-            max_depth,
-            current_depth + 1,
-            loaded_policies,
-        )
-
-    # Print "..." if there are other directories not shown
-    if has_others:
-        is_last = len(files) == 0
-        connector = "└── " if is_last else "├── "
-        print(f"{prefix}{connector}...")
-
-    # Print files (only at depth > 0, or if no loaded_policies filter)
-    if current_depth > 0 or loaded_policies is None:
-        for i, f in enumerate(files):
-            is_last = i == len(files) - 1
-            connector = "└── " if is_last else "├── "
-            print(f"{prefix}{connector}{f}")
+            # Continue recursing
+            extension = "    " if is_last_dir else "│   "
+            _print_directory_tree(
+                os.path.join(directory, d),
+                prefix + extension,
+                max_depth,
+                current_depth + 1,
+                loaded_policies,
+            )
 
 
 # ------------------------------------------------------------
@@ -297,7 +294,6 @@ def add_to_metrics(all_metrics, agg_metrics, k, simulators, p_freeze, windowsize
         k: name/key for the new policy
         simulators: list of simulators (or single simulator) for the new policy
         p_freeze: p_freeze parameter for summarize_trajectory
-        windowsize: windowsize parameter for summarize_trajectory
 
     Returns:
         all_metrics, agg_metrics (updated in place, also returned for convenience)
@@ -315,7 +311,6 @@ def add_to_metrics(all_metrics, agg_metrics, k, simulators, p_freeze, windowsize
                 p_freeze=p_freeze,
                 state_lst_columns=["state_lst"],
                 state_columns=["state"],
-                windowsize=windowsize,
             )
         )
         repeat_metrics.append(simulation.evaluation_metrics(results_df))
@@ -351,12 +346,11 @@ def plot_metric(
     title=None,
     show_ci=True,
     start=20,
-    window=10,
     output_path=None,
 ):
     """
     Plot a single metric for all simulations with confidence intervals.
-    Computes running sum over a window before plotting.
+    Computes cumulative mean: (1/T) * sum_{t=1}^{T} x_t
 
     Args:
         metrics_dict: either all_metrics or agg_metrics from collect_metrics()
@@ -366,16 +360,14 @@ def plot_metric(
         title: optional plot title
         show_ci: whether to show confidence interval (min/max band)
         start: starting episode index (skip first N episodes)
-        window: window size for running sum (default 10)
         output_path: path to save PDF (default: /tmp/{metric_key}-trend.pdf)
     """
     fig = go.Figure()
     import matplotlib.colors as mcolors
 
-    def running_sum(arr, w):
-        """Compute running sum with window w using convolution."""
-        kernel = np.ones(w)
-        return np.convolve(arr, kernel, mode="valid")
+    def cumulative_mean(arr):
+        """Compute cumulative mean: (1/T) * sum_{t=1}^{T} x_t"""
+        return np.cumsum(arr) / np.arange(1, len(arr) + 1)
 
     for i, (k, metrics) in enumerate(metrics_dict.items()):
         if metric_key not in metrics:
@@ -392,35 +384,32 @@ def plot_metric(
 
         # Auto-detect format: agg_metrics has dict with 'mean', all_metrics has ndarray
         if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: apply running sum then slice
-            raw_mean = running_sum(data["mean"], window)
-            raw_std = running_sum(data["std"], window)
-            # Adjust start for window offset
-            adj_start = max(0, start - window + 1)
-            mean_vals = raw_mean[adj_start:]
-            std_vals = raw_std[adj_start:]
+            # agg_metrics format: compute cumulative mean
+            raw_mean = cumulative_mean(data["mean"])
+            # For std, use cumulative std approximation
+            raw_std = data["std"] / np.sqrt(np.arange(1, len(data["std"]) + 1))
+            mean_vals = raw_mean[start:]
+            std_vals = raw_std[start:]
             min_vals = np.maximum(mean_vals - 1 * std_vals, 0)
             max_vals = mean_vals + 1 * std_vals
         elif isinstance(data, np.ndarray):
             # all_metrics format (matrix: repeats x episodes)
             if data.ndim == 2:
-                # Apply running sum to each repetition, then compute stats
-                summed = np.array([running_sum(row, window) for row in data])
-                adj_start = max(0, start - window + 1)
-                mean_vals = np.mean(summed[:, adj_start:], axis=0)
-                std_vals = np.std(summed[:, adj_start:], axis=0)
+                # Compute cumulative mean for each repetition
+                cum_means = np.array([cumulative_mean(row) for row in data])
+                mean_vals = np.mean(cum_means[:, start:], axis=0)
+                std_vals = np.std(cum_means[:, start:], axis=0)
                 min_vals = np.maximum(mean_vals - 1.5 * std_vals, 0)
                 max_vals = mean_vals + 1.5 * std_vals
             else:
                 # 1D array (single run)
-                summed = running_sum(data, window)
-                adj_start = max(0, start - window + 1)
-                mean_vals = summed[adj_start:]
+                cum_mean = cumulative_mean(data)
+                mean_vals = cum_mean[start:]
                 min_vals = max_vals = None
         else:
             continue
 
-        # Episodes start from (start) but account for window offset
+        # Episodes start from (start)
         episodes = np.arange(start, start + len(mean_vals))
 
         # Convert color to rgba with alpha
@@ -502,12 +491,12 @@ def plot_to_tex_equilibrium_box(
     metric_key,
     ylabel="value",
     title=None,
-    last_n=20,
     output_path="/tmp/fig.pdf",
     show_labels=False,
 ):
     """
-    Plot the equilibrium box plot for the given metric using the last N episodes.
+    Plot the equilibrium box plot for the given metric.
+    Computes mean over ALL episodes: (1/T) * sum_{t=1}^{T} x_t
 
     Args:
         metrics_dict: either all_metrics or agg_metrics from collect_metrics()
@@ -515,7 +504,6 @@ def plot_to_tex_equilibrium_box(
                     'total_incarcerated', 'total_returns', 'offense_rate', etc.
         ylabel: optional y-axis label (defaults to metric_key)
         title: optional plot title
-        last_n: number of episodes from the end to use for statistics (default 20)
         output_path: path to save the file (default "/tmp/fig.pdf")
                      Supports .pdf, .png, .pgf, or .tex extensions
         show_labels: if True, show policy names on x-axis (default False)
@@ -531,22 +519,22 @@ def plot_to_tex_equilibrium_box(
 
         data = metrics[metric_key]
 
-        # Auto-detect format and compute sum over last_n episodes per repetition
+        # Auto-detect format and compute mean over ALL episodes
         if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: only have aggregated stats, sum of mean over last_n
-            vals = np.array([np.sum(data["mean"][-last_n:])])
+            # agg_metrics format: mean over ALL episodes
+            vals = np.array([np.mean(data["mean"])])
             box_data.append(vals)
             labels.append(k)
         elif isinstance(data, np.ndarray):
             if data.ndim == 2:
                 # all_metrics format (matrix: repeats x episodes)
-                # Sum last_n episodes for each repetition -> one value per rep
-                vals = np.sum(data[:, -last_n:], axis=1)
+                # Mean over ALL episodes for each repetition
+                vals = np.mean(data, axis=1)
                 box_data.append(vals)
                 labels.append(k)
             else:
-                # 1D array (single run) - sum gives single value
-                vals = np.array([np.sum(data[-last_n:])])
+                # 1D array (single run): mean over ALL episodes
+                vals = np.array([np.mean(data)])
                 box_data.append(vals)
                 labels.append(k)
 
@@ -600,6 +588,170 @@ def plot_to_tex_equilibrium_box(
 
     print(f"Saved to {output_path}")
     return fig
+
+
+import numpy as np
+import pandas as pd
+from scipy.stats import ks_2samp
+
+
+def fsd_test(xa, xb, alpha=0.05):
+    """
+    Test if xa first-order stochastically dominates xb (xa is better, i.e., lower values).
+
+    For lower-is-better metrics (like number of offenses):
+    - xa dominates xb if F_a(x) >= F_b(x) for all x
+    - Meaning: xa has more probability mass on lower (better) values
+    - Equivalently: the CDF of xa is always above or equal to the CDF of xb
+
+    Args:
+        xa: array of values for policy A (lower is better)
+        xb: array of values for policy B (lower is better)
+        alpha: significance level for hypothesis test
+
+    Returns:
+        dict with keys:
+            - ks_stat: KS test statistic
+            - p_value: p-value for one-sided KS test (H1: xa dominates xb)
+            - fsd_empirical: True if F_a(x) >= F_b(x) everywhere (empirical FSD)
+            - reject_at_alpha: True if we reject null at given alpha
+    """
+    xa, xb = np.asarray(xa), np.asarray(xb)
+
+    # For lower-is-better: xa dominates xb if F_a >= F_b
+    # KS test with alternative='greater' tests if CDF of xa is above CDF of xb
+    # This means xa has more mass on lower values (is better)
+    ks = ks_2samp(xa, xb, alternative="greater")
+
+    # empirical FSD check: F_a(x) >= F_b(x) for all x
+    # (xa's CDF should be above or equal to xb's CDF everywhere)
+    grid = np.sort(np.unique(np.r_[xa, xb]))
+    Fa = np.searchsorted(np.sort(xa), grid, side="right") / len(xa)
+    Fb = np.searchsorted(np.sort(xb), grid, side="right") / len(xb)
+    # xa dominates xb if Fa >= Fb everywhere (more mass on lower values)
+    no_cross = np.all(Fa >= Fb - 1e-12)
+
+    return {
+        "ks_stat": ks.statistic,
+        "p_value": ks.pvalue,
+        "fsd_empirical": bool(no_cross),
+        "reject_at_alpha": ks.pvalue < alpha,
+    }
+
+
+def pairwise_fsd_test(
+    metrics_dict,
+    metric_key,
+    alpha=0.05,
+    return_format="dataframe",
+):
+    """
+    Perform pairwise FSD tests between all policies using data from box plot statistics.
+    Computes mean over ALL episodes: (1/T) * sum_{t=1}^{T} x_t
+
+    Args:
+        metrics_dict: either all_metrics or agg_metrics from collect_metrics()
+        metric_key: which metric to test (e.g., 'num_offense', 'num_treated')
+        alpha: significance level for hypothesis test (default: 0.05)
+        return_format: "dataframe" or "dict" (default: "dataframe")
+
+    Returns:
+        If return_format="dataframe":
+            A pandas DataFrame with MultiIndex columns containing:
+            - p_value: p-value matrix (row dominates column if p < alpha)
+            - ks_stat: KS statistic matrix
+            - fsd_empirical: empirical FSD matrix (True if row dominates column)
+            - mean_diff: mean difference matrix (row - column, negative means row is better)
+
+        If return_format="dict":
+            Dictionary with keys 'p_value', 'ks_stat', 'fsd_empirical', 'mean_diff',
+            each containing a DataFrame with policies as both rows and columns.
+
+    Example:
+        >>> results = pairwise_fsd_test(all_metrics, 'num_offense', last_n=5)
+        >>> # Check if 'high-risk' dominates 'null' at alpha=0.05
+        >>> results['p_value'].loc['high-risk', 'null'] < 0.05
+    """
+    # Collect data for each policy (same as box plot)
+    policy_data = {}
+
+    for k, metrics in metrics_dict.items():
+        if metric_key not in metrics:
+            continue
+
+        data = metrics[metric_key]
+
+        # Auto-detect format and compute mean over ALL episodes
+        if isinstance(data, dict) and "mean" in data:
+            # agg_metrics format: mean over ALL episodes
+            vals = np.array([np.mean(data["mean"])])
+        elif isinstance(data, np.ndarray):
+            if data.ndim == 2:
+                # all_metrics format (matrix: repeats x episodes)
+                # Mean over ALL episodes for each repetition
+                vals = np.mean(data, axis=1)
+            else:
+                # 1D array (single run): mean over ALL episodes
+                vals = np.array([np.mean(data)])
+        else:
+            continue
+
+        policy_data[k] = vals
+
+    if not policy_data:
+        print(f"No data found for metric '{metric_key}'")
+        return None
+
+    policies = list(policy_data.keys())
+    n_policies = len(policies)
+
+    # Initialize result matrices
+    p_values = np.full((n_policies, n_policies), np.nan)
+    ks_stats = np.full((n_policies, n_policies), np.nan)
+    fsd_empirical = np.full((n_policies, n_policies), False)
+    mean_diffs = np.full((n_policies, n_policies), np.nan)
+
+    # Perform pairwise tests
+    for i, policy_a in enumerate(policies):
+        for j, policy_b in enumerate(policies):
+            if i == j:
+                # Diagonal: policy compared to itself
+                p_values[i, j] = 1.0
+                ks_stats[i, j] = 0.0
+                fsd_empirical[i, j] = True
+                mean_diffs[i, j] = 0.0
+            else:
+                xa = policy_data[policy_a]
+                xb = policy_data[policy_b]
+
+                # Test if policy_a dominates policy_b
+                result = fsd_test(xa, xb, alpha=alpha)
+                p_values[i, j] = result["p_value"]
+                ks_stats[i, j] = result["ks_stat"]
+                fsd_empirical[i, j] = result["fsd_empirical"]
+                mean_diffs[i, j] = np.mean(xa) - np.mean(xb)
+
+    # Create DataFrames with policy names as index and columns
+    p_value_df = pd.DataFrame(p_values, index=policies, columns=policies)
+    ks_stat_df = pd.DataFrame(ks_stats, index=policies, columns=policies)
+    fsd_empirical_df = pd.DataFrame(fsd_empirical, index=policies, columns=policies)
+    mean_diff_df = pd.DataFrame(mean_diffs, index=policies, columns=policies)
+
+    if return_format == "dict":
+        return {
+            "p_value": p_value_df,
+            "ks_stat": ks_stat_df,
+            "fsd_empirical": fsd_empirical_df,
+            "mean_diff": mean_diff_df,
+        }
+    else:
+        # Return as MultiIndex DataFrame
+        result_df = pd.concat(
+            [p_value_df, ks_stat_df, fsd_empirical_df, mean_diff_df],
+            keys=["p_value", "ks_stat", "fsd_empirical", "mean_diff"],
+            axis=1,
+        )
+        return result_df
 
 
 def plot_policy_legend(

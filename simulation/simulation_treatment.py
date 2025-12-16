@@ -13,7 +13,6 @@ from scipy.optimize import curve_fit
 # ------------------------------------------------------------------------------
 def treatment_null(dfi, **kwargs):
     dfi["bool_treat"] = 0.0
-    dfi["score_with_treat"] = dfi["score"]
     return []
 
 
@@ -34,7 +33,6 @@ def batch_treatment_rule(func):
     def wrapper(
         dfi,
         capacity=100,
-        effect=0.15,
         str_qualifying="",
         str_current_enroll="",
         t=0.0,
@@ -65,10 +63,6 @@ def batch_treatment_rule(func):
 
         # Apply treatment to selected
         dfi.loc[idx_selected, "bool_treat"] = 1.0
-        dfi.loc[idx_selected, "score_with_treat"] = (
-            dfi.loc[idx_selected, "score"]
-            - dfi.loc[idx_selected, "bool_treat"] * effect
-        )
         dfi.loc[idx_selected, "treat_start"] = t
         dfi.loc[idx_selected, "has_been_treated"] = 1.0
         dfi.loc[idx_selected, "num_treated"] += 1

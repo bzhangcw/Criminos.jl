@@ -121,6 +121,7 @@ def run_sim(name, func_treatment=None, func_treatment_kwargs=None, seed=1, verbo
         T_max=T_max,
         p_length=p_length,
         p_freeze=p_freeze,
+        treatment_effect=treatment_effect,
         func_treatment=func_treatment,
         func_treatment_kwargs=func_treatment_kwargs,
     )
@@ -137,7 +138,7 @@ tests = {
     "null": (simulation.treatment_null, dict()),
     "random": (
         simulation.treatment_rule_random,
-        dict(capacity=treatment_capacity, effect=treatment_effect),
+        dict(capacity=treatment_capacity),
     ),
     "high_risk": (
         simulation.treatment_rule_priority,
@@ -145,7 +146,6 @@ tests = {
             key="score",
             capacity=treatment_capacity,
             ascending=False,
-            effect=treatment_effect,
         ),
     ),
     "low_risk": (
@@ -154,7 +154,6 @@ tests = {
             key="score",
             capacity=treatment_capacity,
             ascending=True,
-            effect=treatment_effect,
         ),
     ),
     "low_age_high_prev": (
@@ -163,7 +162,6 @@ tests = {
             key="_new_prior",
             capacity=treatment_capacity,
             ascending=True,
-            effect=treatment_effect,
             to_compute=lambda df: df.apply(
                 lambda row: (row["age_dist"], -row["felony_arrest"]), axis=1
             ),
@@ -175,7 +173,6 @@ tests = {
             key="_new_prior",
             capacity=treatment_capacity,
             ascending=True,
-            effect=treatment_effect,
             to_compute=lambda df: df.apply(
                 lambda row: (row["age_dist"], row["felony_arrest"]), axis=1
             ),
@@ -187,7 +184,6 @@ tests = {
             key="_new_prior",
             capacity=treatment_capacity,
             ascending=True,
-            effect=treatment_effect,
             to_compute=lambda df: df.apply(
                 lambda row: (-row["felony_arrest"], row["age_dist"]), axis=1
             ),
