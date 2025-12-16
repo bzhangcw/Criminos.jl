@@ -84,6 +84,8 @@ def dump_rep_metrics(simulator, output_dir, p_freeze):
             f.create_dataset(metric_key, data=values)
 
     print(f"Saved metrics to {filepath}")
+    # also save the dfi as excel file
+    simulator.dfi.to_excel(f"{output_dir}/dfi.xlsx")
 
 
 def read_metrics_from_h5(name, output_dir="results"):
