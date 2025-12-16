@@ -194,9 +194,9 @@ def load_to_metrics(
     all_metrics[name] = policy_metrics
     agg_metrics[name] = policy_agg
 
-    # Print directory tree if requested
+    # Print directory tree if requested (only for this policy)
     if print_tree:
-        _print_directory_tree(output_dir, loaded_policies=list(all_metrics.keys()))
+        _print_directory_tree(output_dir, loaded_policies=[name])
 
     return all_metrics, agg_metrics
 
@@ -240,17 +240,17 @@ def _print_directory_tree(
         if os.path.isfile(os.path.join(directory, e)) and not e.startswith(".")
     ]
 
-    # Filter directories: only show loaded policies at root level
+    # Only show loaded policies at root level
     if current_depth == 0 and loaded_policies is not None:
-        # Show only loaded policies at root level
+        # Show only loaded policy names and their subdirectories
         dirs = [d for d in all_dirs if d in loaded_policies]
 
-        # Only print directories (skip files completely)
         for i, d in enumerate(dirs):
             is_last_dir = i == len(dirs) - 1
             connector = "└── " if is_last_dir else "├── "
             print(f"{prefix}{connector}{d}/")
 
+            # Recurse into this policy directory to show its contents
             extension = "    " if is_last_dir else "│   "
             _print_directory_tree(
                 os.path.join(directory, d),
@@ -260,15 +260,15 @@ def _print_directory_tree(
                 loaded_policies,
             )
     elif current_depth > 0:
-        # At deeper levels (inside policy directories), show all subdirectories
+        # Inside policy directories, show all subdirectories
         dirs = all_dirs
 
-        # Only print directories (skip files completely)
         for i, d in enumerate(dirs):
             is_last_dir = i == len(dirs) - 1
             connector = "└── " if is_last_dir else "├── "
             print(f"{prefix}{connector}{d}/")
 
+            # Continue recursing
             extension = "    " if is_last_dir else "│   "
             _print_directory_tree(
                 os.path.join(directory, d),
