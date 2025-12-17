@@ -403,6 +403,18 @@ def get_tests(settings=None):
                 < thres_cutoff[row["age_dist"]],
             ),
         ),
+        "high-risk-lean-young": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: row["score"] + row["age_dist"] * 0.1, axis=1
+                ),
+            ),
+        ),
         # ------------------------------------------------------------
         # fluid/probabilistic policies
         # ------------------------------------------------------------

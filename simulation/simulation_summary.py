@@ -34,12 +34,19 @@ plt.rcParams.update(
 POLICY_COLORS = {
     "null": "#7f7f7f",  # gray
     "random": "#9467bd",  # purple
+    # ------------------------------------------------------------
+    # priority policies; will exhaust the capacity
+    # ------------------------------------------------------------
     "high-risk": "#d62728",  # red
     "low-risk": "#ff7f0e",  # orange
     "high-risk-only-young": "#e377c2",  # pink
+    "high-risk-lean-young": "#2ca02c",  # green
+    "age-tolerance": "#17becf",  # cyan
+    # ------------------------------------------------------------
+    # fluid policies; may not exhaust the capacity
+    # ------------------------------------------------------------
     "fluid-low-age-low-prev": "#1f77b4",  # blue
     "fluid-low-age-threshold-offenses": "#2ca02c",  # green
-    "age-tolerance": "#17becf",  # cyan
 }
 
 
