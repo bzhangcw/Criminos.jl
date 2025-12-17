@@ -180,9 +180,20 @@ class SimulationSetup:
 
         # Sample initial population
         np.random.seed(123)
+        self.assign_weights()
         self.dfpop0 = self.dfi.sample(30)
 
         SimulationSetup._data_loaded = True
+
+    def assign_weights(self):
+        """Assign weights to the individuals so I sample according to the weights."""
+        # self.dfi["weight"] = 1.0
+
+        # young age / large weights
+        self.dfi["weight"] = self.dfi["age"].apply(lambda x: 100 - x)
+
+        print(self.dfi[["age", "age_dist", "weight"]].head(10))
+        return self.dfi
 
     def arrival_func(self, *args, **kwargs):
         # Access via class to avoid descriptor binding
