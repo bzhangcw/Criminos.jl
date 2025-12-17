@@ -44,6 +44,7 @@ class SimulationSetup:
     """
     beta_arrival = 2
     communities = {1}
+    rel_off_probation = 2000
     fit_kwargs = {
         "new_col": "felony_arrest",
         "bool_use_cph": False,
@@ -106,6 +107,7 @@ class SimulationSetup:
         print(f"  T_max:             {self.T_max:,} time units")
         print(f"  p_length:          {self.p_length} (episode length)")
         print(f"  p_freeze:          {self.p_freeze} (freeze period)")
+        print(f"  off_prob:          {self.rel_off_probation} (off-probation term)")
         print(f"  n_episodes:        ~{n_episodes}")
         print("-" * 60)
         print("Treatment Settings:")
@@ -121,6 +123,7 @@ class SimulationSetup:
         print(f"  communities:       {self.communities}")
         print(f"  initial pop:       {len(self.dfpop0)} individuals")
         print(f"  available pool:    {len(self.dfi)} individuals")
+        print(self.dfi[["age", "age_dist", "weight"]].head(5))
         print("-" * 60)
         print("State Space:")
         print(f"  dimensions:        {state_dims}")
@@ -192,7 +195,6 @@ class SimulationSetup:
         # young age / large weights
         # self.dfi["weight"] = self.dfi["age"].apply(lambda x: 100 - x)
 
-        print(self.dfi[["age", "age_dist", "weight"]].head(10))
         return self.dfi
 
     def arrival_func(self, *args, **kwargs):
@@ -240,6 +242,7 @@ def run_sim(
         T_max=settings.T_max,
         p_length=settings.p_length,
         p_freeze=settings.p_freeze,
+        rel_off_probation=settings.rel_off_probation,
         treatment_effect=settings.treatment_effect,
         func_treatment=func_treatment,
         func_treatment_kwargs=func_treatment_kwargs,
