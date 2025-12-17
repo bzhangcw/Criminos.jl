@@ -3,7 +3,8 @@ start=$2
 output=$3
 echo "Generating commands for $repeat repeats starting from repeation number $start"
 
-policies=(null random high-risk low-risk high-risk-only-young age-tolerance)
+# policies=(null random high-risk low-risk high-risk-only-young age-tolerance)
+policies=(high-risk-lean-young)
 
 # Generate commands to cmd.sh
 if [[ -f cmd.sh ]]; then

@@ -187,10 +187,10 @@ class SimulationSetup:
 
     def assign_weights(self):
         """Assign weights to the individuals so I sample according to the weights."""
-        # self.dfi["weight"] = 1.0
+        self.dfi["weight"] = 1.0
 
         # young age / large weights
-        self.dfi["weight"] = self.dfi["age"].apply(lambda x: 100 - x)
+        # self.dfi["weight"] = self.dfi["age"].apply(lambda x: 100 - x)
 
         print(self.dfi[["age", "age_dist", "weight"]].head(10))
         return self.dfi
@@ -411,7 +411,7 @@ def get_tests(settings=None):
                 ascending=True,
                 effect=settings.treatment_effect,
                 to_compute=lambda df: df.apply(
-                    lambda row: row["score"] + row["age_dist"] * 0.1, axis=1
+                    lambda row: row["score"] + row["age_dist"] * 0.05, axis=1
                 ),
             ),
         ),
