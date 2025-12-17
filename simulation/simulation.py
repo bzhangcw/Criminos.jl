@@ -525,7 +525,7 @@ class Simulator(object):
 
         # push one arrival event
         if self.func_arrival is not None:
-            _row = dfpop.sample(1).iloc[0]
+            _row = dfpop.sample(1, weights="weight").iloc[0]
             # arrival event
             _arrival = self.func_arrival(
                 _row,
