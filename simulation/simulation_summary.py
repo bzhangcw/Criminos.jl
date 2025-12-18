@@ -420,8 +420,8 @@ def plot_metric(
 
         mean_vals = raw_mean[start:]
         std_vals = raw_std[start:]
-        min_vals = np.maximum(mean_vals - 1 * std_vals, 0)
-        max_vals = mean_vals + 1 * std_vals
+        min_vals = np.maximum(mean_vals - 2 * std_vals, 0)
+        max_vals = mean_vals + 2 * std_vals
 
         # Episodes start from (start)
         episodes = np.arange(start, start + len(mean_vals))
