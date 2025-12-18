@@ -354,13 +354,15 @@ def plot_metric(
     show_ci=True,
     start=20,
     output_path=None,
+    num_period_window=None,
 ):
     """
     Plot a single metric for all simulations with confidence intervals.
-    Computes cumulative mean: (1/T) * sum_{t=1}^{T} x_t
+    Computes rolling sum over last num_period_window periods: sum_{t=T-W+1}^{T} x_t
+    If num_period_window is None, computes cumulative mean: (1/T) * sum_{t=1}^{T} x_t
 
     Args:
-        metrics_dict: either all_metrics or agg_metrics from collect_metrics()
+        metrics_dict: agg_metrics from collect_metrics() (dict with 'mean' and 'std')
         metric_key: e.g. 'total_population', 'total_offenses', 'total_enrollment',
                     'total_incarcerated', 'total_returns', 'offense_rate', etc.
         ylabel: optional y-axis label (defaults to metric_key)
@@ -368,19 +370,22 @@ def plot_metric(
         show_ci: whether to show confidence interval (min/max band)
         start: starting episode index (skip first N episodes)
         output_path: path to save PDF (default: /tmp/{metric_key}-trend.pdf)
+        num_period_window: window size for rolling sum (if None, uses cumulative mean)
     """
     fig = go.Figure()
     import matplotlib.colors as mcolors
-
-    def cumulative_mean(arr):
-        """Compute cumulative mean: (1/T) * sum_{t=1}^{T} x_t"""
-        return np.cumsum(arr) / np.arange(1, len(arr) + 1)
 
     for i, (k, metrics) in enumerate(metrics_dict.items()):
         if metric_key not in metrics:
             continue
 
         data = metrics[metric_key]
+        if not isinstance(data, dict) or "mean" not in data:
+            print(
+                f"Skipping {k}: expected agg_metrics format (dict with 'mean' and 'std')"
+            )
+            continue
+
         # Use same policy colors as box plots
         color_raw = get_policy_color(k, fallback_idx=i)
         # Convert to hex for Plotly
@@ -389,32 +394,34 @@ def plot_metric(
         else:
             color = mcolors.to_hex(color_raw[:3])
 
-        # Auto-detect format: agg_metrics has dict with 'mean', all_metrics has ndarray
-        if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: compute cumulative mean
-            raw_mean = cumulative_mean(data["mean"])
+        # Compute rolling sum or cumulative mean
+        if num_period_window is not None:
+            # Rolling sum: sum_{t=T-W+1}^{T} x_t at each time point
+            cumsum = np.cumsum(data["mean"])
+            raw_mean = np.array(
+                [
+                    (
+                        cumsum[i]
+                        if i < num_period_window
+                        else cumsum[i] - cumsum[i - num_period_window]
+                    )
+                    for i in range(len(data["mean"]))
+                ]
+            )
+            # For std, scale by window size for sum
+            raw_std = data["std"] * np.sqrt(
+                np.minimum(np.arange(1, len(data["std"]) + 1), num_period_window)
+            )
+        else:
+            # Cumulative mean: (1/T) * sum_{t=1}^{T} x_t
+            raw_mean = np.cumsum(data["mean"]) / np.arange(1, len(data["mean"]) + 1)
             # For std, use cumulative std approximation
             raw_std = data["std"] / np.sqrt(np.arange(1, len(data["std"]) + 1))
-            mean_vals = raw_mean[start:]
-            std_vals = raw_std[start:]
-            min_vals = np.maximum(mean_vals - 1 * std_vals, 0)
-            max_vals = mean_vals + 1 * std_vals
-        elif isinstance(data, np.ndarray):
-            # all_metrics format (matrix: repeats x episodes)
-            if data.ndim == 2:
-                # Compute cumulative mean for each repetition
-                cum_means = np.array([cumulative_mean(row) for row in data])
-                mean_vals = np.mean(cum_means[:, start:], axis=0)
-                std_vals = np.std(cum_means[:, start:], axis=0)
-                min_vals = np.maximum(mean_vals - 1.5 * std_vals, 0)
-                max_vals = mean_vals + 1.5 * std_vals
-            else:
-                # 1D array (single run)
-                cum_mean = cumulative_mean(data)
-                mean_vals = cum_mean[start:]
-                min_vals = max_vals = None
-        else:
-            continue
+
+        mean_vals = raw_mean[start:]
+        std_vals = raw_std[start:]
+        min_vals = np.maximum(mean_vals - 1 * std_vals, 0)
+        max_vals = mean_vals + 1 * std_vals
 
         # Episodes start from (start)
         episodes = np.arange(start, start + len(mean_vals))
@@ -500,13 +507,15 @@ def plot_to_tex_equilibrium_box(
     title=None,
     output_path="/tmp/fig.pdf",
     show_labels=False,
+    num_period_window=None,
 ):
     """
     Plot the equilibrium box plot for the given metric.
-    Computes mean over ALL episodes: (1/T) * sum_{t=1}^{T} x_t
+    Computes sum over last num_period_window periods: sum_{t=T-W+1}^{T} x_t
+    If num_period_window is None, computes mean over ALL episodes: (1/T) * sum_{t=1}^{T} x_t
 
     Args:
-        metrics_dict: either all_metrics or agg_metrics from collect_metrics()
+        metrics_dict: agg_metrics from collect_metrics() (dict with 'mean' and 'std')
         metric_key: e.g. 'total_population', 'total_offenses', 'total_enrollment',
                     'total_incarcerated', 'total_returns', 'offense_rate', etc.
         ylabel: optional y-axis label (defaults to metric_key)
@@ -514,6 +523,7 @@ def plot_to_tex_equilibrium_box(
         output_path: path to save the file (default "/tmp/fig.pdf")
                      Supports .pdf, .png, .pgf, or .tex extensions
         show_labels: if True, show policy names on x-axis (default False)
+        num_period_window: window size for sum over last periods (if None, uses mean over all)
     """
 
     # Collect data for box plot: list of (policy_name, flattened_values)
@@ -525,25 +535,21 @@ def plot_to_tex_equilibrium_box(
             continue
 
         data = metrics[metric_key]
+        if not isinstance(data, dict) or "mean" not in data:
+            print(
+                f"Skipping {k}: expected agg_metrics format (dict with 'mean' and 'std')"
+            )
+            continue
 
-        # Auto-detect format and compute mean over ALL episodes
-        if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: mean over ALL episodes
+        # Compute sum over last num_period_window or mean over ALL episodes
+        if num_period_window is not None:
+            # Sum over last num_period_window periods
+            vals = np.array([np.sum(data["mean"][-num_period_window:])])
+        else:
+            # Mean over ALL episodes
             vals = np.array([np.mean(data["mean"])])
-            box_data.append(vals)
-            labels.append(k)
-        elif isinstance(data, np.ndarray):
-            if data.ndim == 2:
-                # all_metrics format (matrix: repeats x episodes)
-                # Mean over ALL episodes for each repetition
-                vals = np.mean(data, axis=1)
-                box_data.append(vals)
-                labels.append(k)
-            else:
-                # 1D array (single run): mean over ALL episodes
-                vals = np.array([np.mean(data)])
-                box_data.append(vals)
-                labels.append(k)
+        box_data.append(vals)
+        labels.append(k)
 
     if not box_data:
         print(f"No data found for metric '{metric_key}'")
