@@ -208,9 +208,12 @@ class StateDefs(object):
             dfi.loc[idx, "age_start"] + (t - dfi.loc[idx, "arrival"]) / 365.0
         )
         dfi.loc[idx, "age_dist"] = sirakaya.age_to_age_dist(dfi.loc[idx, "age"])
-        dfi.loc[idx, "score_age_dist"] = sirakaya.score_age_dist(
-            dfi.loc[idx, "age_dist"]
-        )
+        # @note: c.z (2025-12-17). previously we used score_age_dist to score the age_dist.
+        # but now we use the age to score the age_dist.
+        # dfi.loc[idx, "score_age_dist"] = sirakaya.score_age_dist(
+        #     dfi.loc[idx, "age_dist"]
+        # )
+        dfi.loc[idx, "score_age_dist"] = sirakaya.score_age(dfi.loc[idx, "age"])
         # the score of felony_arrest is just itself
         dfi.loc[idx, "score_felony_arrest"] = dfi.loc[idx, "felony_arrest"]
 
@@ -767,7 +770,7 @@ class Simulator(object):
             #  then update the score of the community
             if _episode > p:
                 opt_verbosity >= 1 and print(
-                    f"event:happ/\t{_episode}: update score", file=fo
+                    f"event:happ/\t{_episode}: update community score", file=fo
                 )
                 for _cid in id_cc:
                     # computation of the percentage of re-arrested people

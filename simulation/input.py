@@ -95,8 +95,8 @@ def load_data(datadir="./"):
         ),
         # this part is generally unchanged
         score_fixed=lambda df: df.apply(sirakaya.eval_score_fixed, axis=1),
+        score_age_dist=lambda df: df["age_dist"].apply(sirakaya.score_age_dist),
     ).dropna(subset=["score_fixed"])
-    df["score_age_dist"] = sirakaya.score_age_dist_vec(df["age_dist"])
 
     # community data
     df_community = (

@@ -112,24 +112,63 @@ def score_levels(v, vals):
     return vals[n - 1]
 
 
-def vectorized_score_levels(v, vals):
-    """
-    Fast selection of level values where thresholds are 1, 2, ..., len(vals).
-    Returns vals[ceil(v)-1], clamped to [0, len(vals)-1]. Works for scalars or arrays.
-    """
-    vals_arr = np.asarray(vals)
-    n = vals_arr.shape[0]
-    idx = np.ceil(v) - 1.0
-    idx = np.clip(idx, 0, n - 1).astype(int)
-    return vals_arr[idx]
-
-
-def score_age_dist_vec(v):
-    return vectorized_score_levels(v, _SCORE_AGE_DIST_VALS)
-
-
 def score_age_dist(v):
     return score_levels(v, _SCORE_AGE_DIST_VALS)
+
+
+def score_age(age):
+    """
+    Compute age score using linear interpolation based on continuous age value.
+
+    Uses age_dist_map boundaries and _SCORE_AGE_DIST_VALS to interpolate.
+    The mapping is:
+    - age in [18, 20) -> interpolate between 0.0 and -0.270
+    - age in [20, 25) -> interpolate between -0.270 and -0.456
+    - age in [25, 30) -> interpolate between -0.456 and -0.709
+    - age in [30, 40) -> interpolate between -0.709 and -1.282
+    - age in [40, 50) -> interpolate between -1.282 and -1.808
+    - age >= 50       -> extrapolate using the trend from [40, 50)
+
+    For example, if age=21, it lies between 20 and 25, so the score is
+    interpolated between -0.270 and -0.456.
+
+    Args:
+        age: continuous age value
+
+    Returns:
+        interpolated score value
+    """
+    # Handle edge case: below minimum age
+    if age < age_dist_map[0]:
+        return _SCORE_AGE_DIST_VALS[0]
+
+    # Handle edge case: above maximum age - extrapolate using last segment's trend
+    if age >= age_dist_map[5]:  # age >= 50
+        # Use the slope from the last segment [40, 50)
+        age_lower = age_dist_map[4]  # 40
+        age_upper = age_dist_map[5]  # 50
+        score_lower = _SCORE_AGE_DIST_VALS[4]  # -1.282
+        score_upper = _SCORE_AGE_DIST_VALS[5]  # -1.808
+        slope = (score_upper - score_lower) / (age_upper - age_lower)
+        # Extrapolate: score = score_upper + slope * (age - age_upper)
+        return score_upper + slope * (age - age_upper)
+
+    # Find the bracket: age is in [age_dist_map[i], age_dist_map[i+1])
+    # and should interpolate between _SCORE_AGE_DIST_VALS[i] and _SCORE_AGE_DIST_VALS[i+1]
+    for i in range(5):  # Only go up to i=4, so we access indices 0-5
+        age_lower = age_dist_map[i]
+        age_upper = age_dist_map[i + 1]
+
+        if age_lower <= age < age_upper:
+            score_lower = _SCORE_AGE_DIST_VALS[i]
+            score_upper = _SCORE_AGE_DIST_VALS[i + 1]
+
+            # Linear interpolation
+            t = (age - age_lower) / (age_upper - age_lower)
+            return score_lower + t * (score_upper - score_lower)
+
+    # Should not reach here, but return the last score if we do
+    return _SCORE_AGE_DIST_VALS[5]
 
 
 def eval_score_fixed(row):
