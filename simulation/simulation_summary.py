@@ -511,11 +511,11 @@ def plot_to_tex_equilibrium_box(
 ):
     """
     Plot the equilibrium box plot for the given metric.
-    Computes sum over last num_period_window periods: sum_{t=T-W+1}^{T} x_t
+    Computes sum over last num_period_window periods: sum_{t=T-W+1}^{T} x_t for each repetition
     If num_period_window is None, computes mean over ALL episodes: (1/T) * sum_{t=1}^{T} x_t
 
     Args:
-        metrics_dict: agg_metrics from collect_metrics() (dict with 'mean' and 'std')
+        metrics_dict: policy_metrics from read_metrics_from_h5() (dict with 2D arrays: repeats x episodes)
         metric_key: e.g. 'total_population', 'total_offenses', 'total_enrollment',
                     'total_incarcerated', 'total_returns', 'offense_rate', etc.
         ylabel: optional y-axis label (defaults to metric_key)
@@ -535,19 +535,17 @@ def plot_to_tex_equilibrium_box(
             continue
 
         data = metrics[metric_key]
-        if not isinstance(data, dict) or "mean" not in data:
-            print(
-                f"Skipping {k}: expected agg_metrics format (dict with 'mean' and 'std')"
-            )
+        if not isinstance(data, np.ndarray) or data.ndim != 2:
+            print(f"Skipping {k}: expected 2D array format (repeats x episodes)")
             continue
 
-        # Compute sum over last num_period_window or mean over ALL episodes
+        # Compute sum over last num_period_window or mean over ALL episodes for each repetition
         if num_period_window is not None:
-            # Sum over last num_period_window periods
-            vals = np.array([np.sum(data["mean"][-num_period_window:])])
+            # Sum over last num_period_window periods for each repetition
+            vals = np.sum(data[:, -num_period_window:], axis=1)
         else:
-            # Mean over ALL episodes
-            vals = np.array([np.mean(data["mean"])])
+            # Mean over ALL episodes for each repetition
+            vals = np.mean(data, axis=1)
         box_data.append(vals)
         labels.append(k)
 
