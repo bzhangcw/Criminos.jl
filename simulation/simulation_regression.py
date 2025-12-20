@@ -1,4 +1,5 @@
 # survival function fitters
+import json
 import pandas as pd
 from autograd import numpy as np
 from lifelines import CoxPHFitter
@@ -13,14 +14,9 @@ from scipy.optimize import curve_fit
 DEFAULT_SCORING_PARAMS = {
     "score_fixed": 0.7904,
     "score_comm": 0.7904,
-    "score_age_dist": 0.7904,
-    "score_felony_arrest": 0.1884,
+    "score_treatment": 1.0,
+    "score_state": 1.0,
 }
-
-
-# without refitting, just use the original covariates
-def scoring_null(idx, dfi, **kwargs):
-    return dfi.loc[idx, "offset"]
 
 
 def scoring_all(idx, dfi, scoring_weights=DEFAULT_SCORING_PARAMS, **kwargs):
@@ -29,8 +25,10 @@ def scoring_all(idx, dfi, scoring_weights=DEFAULT_SCORING_PARAMS, **kwargs):
     return (
         dfi.loc[idx, "score_fixed"] * scoring_weights["score_fixed"]
         + dfi.loc[idx, "score_comm"] * scoring_weights["score_comm"]
-        + dfi.loc[idx, "score_state"]
         # note the individual state is weighted already.
+        + dfi.loc[idx, "score_state"] * scoring_weights["score_state"]
+        # the treatment effect is applied to the score.
+        + dfi.loc[idx, "score_treatment"] * scoring_weights["score_treatment"]
     )
 
 
@@ -134,70 +132,76 @@ def refit_baseline_extra(
             formula=f"offset + {new_col}",
             show_progress=(verbosity > 0),
         )
+        # 4) Compute a new linear predictor: score = α * offset + β * new_col
+        # @note: the original score is kept in the `offset`
+        df_individual["score"] = (
+            cph.params_["offset"] * df_individual["offset"]
+            + cph.params_[new_col] * df_individual[new_col]
+        )
+
+        # 5) Recompute baseline cumulative hazard (Breslow) using combined_score
+        df_sorted = df_individual.sort_values("time")
+        times = df_sorted["time"].unique()
+        baseline_cumhaz = []
+
+        for t in times:
+            n_deaths = (
+                (df_individual["time"] == t) & (df_individual["observed"] == 1)
+            ).sum()
+            risk_set = df_individual["time"] >= t
+            sum_risk = np.sum(np.exp(df_individual.loc[risk_set, "score"]))
+            dLambda = n_deaths / sum_risk if sum_risk > 0 else 0
+            baseline_cumhaz.append((t, dLambda))
+
+        cumhaz_df = pd.DataFrame(baseline_cumhaz, columns=["time", "dLambda"])
+        cumhaz_df["Lambda"] = cumhaz_df["dLambda"].cumsum()
+        cumhaz_df["S0"] = np.exp(-cumhaz_df["Lambda"])
+
+        self.cumhaz_df = cumhaz_df
+        self.cumhaz_df_by_cph = cph.baseline_survival_.copy()
+
+        if bool_use_cph:
+            self.s0_with_interpolation = interp1d(
+                self.cumhaz_df_by_cph.index.values,
+                self.cumhaz_df_by_cph["baseline survival"].values,
+                kind="previous",
+                fill_value="extrapolate",
+            )
+        else:
+            self.s0_with_interpolation = interp1d(
+                cumhaz_df["time"].values,
+                cumhaz_df["S0"].values,
+                kind="previous",
+                fill_value="extrapolate",
+            )
+
+        self.s0 = self.s0_with_interpolation
+        if baseline == "gompertz":
+            __override_Gompertz(self, verbosity=verbosity)
+        self._scoring_state_weights = {
+            "score_age_dist": cph.params_["lambda_"]["offset"],
+            f"score_{new_col}": cph.params_["lambda_"][new_col],
+        }
+        self._scoring_weights = {
+            "score_fixed": cph.params_["lambda_"]["offset"],
+            "score_comm": cph.params_["lambda_"]["offset"],
+            "score_state": 1.0,
+            "score_treatment": 1.0,
+        }
     else:
         if verbosity > 0:
             print("Using exponential AFT")
         __refit_baseline_extra_aft_exponential(
             self, df_individual, new_col, verbosity=verbosity
         )
-        return
 
-    # 4) Compute a new linear predictor: score = α * offset + β * new_col
-    # @note: the original score is kept in the `offset`
-    df_individual["score"] = (
-        cph.params_["offset"] * df_individual["offset"]
-        + cph.params_[new_col] * df_individual[new_col]
-    )
-
-    # 5) Recompute baseline cumulative hazard (Breslow) using combined_score
-    df_sorted = df_individual.sort_values("time")
-    times = df_sorted["time"].unique()
-    baseline_cumhaz = []
-
-    for t in times:
-        n_deaths = (
-            (df_individual["time"] == t) & (df_individual["observed"] == 1)
-        ).sum()
-        risk_set = df_individual["time"] >= t
-        sum_risk = np.sum(np.exp(df_individual.loc[risk_set, "score"]))
-        dLambda = n_deaths / sum_risk if sum_risk > 0 else 0
-        baseline_cumhaz.append((t, dLambda))
-
-    cumhaz_df = pd.DataFrame(baseline_cumhaz, columns=["time", "dLambda"])
-    cumhaz_df["Lambda"] = cumhaz_df["dLambda"].cumsum()
-    cumhaz_df["S0"] = np.exp(-cumhaz_df["Lambda"])
-
-    self.cumhaz_df = cumhaz_df
-    self.cumhaz_df_by_cph = cph.baseline_survival_.copy()
-
-    if bool_use_cph:
-        self.s0_with_interpolation = interp1d(
-            self.cumhaz_df_by_cph.index.values,
-            self.cumhaz_df_by_cph["baseline survival"].values,
-            kind="previous",
-            fill_value="extrapolate",
-        )
-    else:
-        self.s0_with_interpolation = interp1d(
-            cumhaz_df["time"].values,
-            cumhaz_df["S0"].values,
-            kind="previous",
-            fill_value="extrapolate",
-        )
-
-    self.s0 = self.s0_with_interpolation
-    self._scoring_weights = _scoring_weights = {
-        "score_fixed": cph.params_["lambda_"]["offset"],
-        "score_comm": cph.params_["lambda_"]["offset"],
-        "score_age_dist": cph.params_["lambda_"]["offset"],
-        f"score_{new_col}": cph.params_["lambda_"][new_col],
-    }
     if verbosity > 0:
-        print(_scoring_weights)
-    self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, _scoring_weights)
-
-    if baseline == "gompertz":
-        __override_Gompertz(self, verbosity=verbosity)
+        print("The fitted state weights are:")
+        print(json.dumps(self._scoring_state_weights, indent=4))
+        print("The fitted weights are:")
+        print(json.dumps(self._scoring_weights, indent=4))
+    self.state_defs.scoring_weights = self._scoring_state_weights
+    self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, self._scoring_weights)
 
 
 def __override_Gompertz(self, verbosity=0):
@@ -264,13 +268,20 @@ def __refit_baseline_extra_aft_exponential(self, df_individual, new_col, verbosi
 
     self.s0_with_interpolation = lambda t: np.exp(-λ0 * t)
     self.s0 = self.s0_with_interpolation
-    self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, new_col, _params)
-    self._scoring_weights = _scoring_weights = {
-        "score_fixed": cph.params_["lambda_"]["offset"],
-        "score_comm": cph.params_["lambda_"]["offset"],
+    self._scoring_state_weights = {
         "score_age_dist": cph.params_["lambda_"]["offset"],
         f"score_{new_col}": cph.params_["lambda_"][new_col],
     }
-    if verbosity > 0:
-        print(_scoring_weights)
-    self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, _scoring_weights)
+    self._scoring_weights = {
+        "score_fixed": cph.params_["lambda_"]["offset"],
+        "score_comm": cph.params_["lambda_"]["offset"],
+        "score_state": 1.0,
+        "score_treatment": 1.0,
+    }
+    # if verbosity > 0:
+    #     print("The fitted state weights are:")
+    #     print(json.dumps(self._scoring_state_weights, indent=4))
+    #     print("The fitted weights are:")
+    #     print(json.dumps(self._scoring_weights, indent=4))
+    # self.state_defs.scoring_weights = self._scoring_state_weights
+    # self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, self._scoring_weights)

@@ -42,6 +42,7 @@ POLICY_COLORS = {
     "high-risk-only-young": "#e377c2",  # pink
     "high-risk-lean-young": "#2ca02c",  # green
     "age-tolerance": "#17becf",  # cyan
+    "age-first": "#17becf",  # green
     # ------------------------------------------------------------
     # fluid policies; may not exhaust the capacity
     # ------------------------------------------------------------
@@ -82,6 +83,11 @@ def dump_rep_metrics(simulator, output_dir, p_freeze):
             p_freeze=p_freeze, state_lst_columns=["state_lst"], state_columns=["state"]
         )
     )
+
+    # also save the dfi as excel file
+    simulator.dfi.to_excel(f"{output_dir}/dfi.xlsx")
+    results_df[-1].to_excel(f"{output_dir}/df_result_last.xlsx")
+
     metrics = simulation.evaluation_metrics(results_df)
 
     # Save to HDF5 file with flat structure (one 1D array per metric)
@@ -91,8 +97,6 @@ def dump_rep_metrics(simulator, output_dir, p_freeze):
             f.create_dataset(metric_key, data=values)
 
     print(f"Saved metrics to {filepath}")
-    # also save the dfi as excel file
-    simulator.dfi.to_excel(f"{output_dir}/dfi.xlsx")
 
 
 def read_metrics_from_h5(name, output_dir="results"):

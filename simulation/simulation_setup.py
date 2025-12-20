@@ -33,10 +33,10 @@ class SimulationSetup:
     """Configuration class for simulation parameters."""
 
     # Default values
-    p_length = 60
+    p_length = 200
     p_freeze = 0
     T_max = 30000
-    treatment_capacity = 50
+    treatment_capacity = 80
     treatment_effect = 0.5
     """@note: try not change to 1
     1: vital for memory need about 5G RAM
@@ -52,20 +52,22 @@ class SimulationSetup:
     }
     func_to_call = simulation.arrival_constant
     state_defs = simulation.StateDefs(
-        ["felony_arrest", "age_dist", "bool_in_probation"]
+        ["felony_arrest", "age_dist", "has_been_treated", "stage"]
     )
 
     # Treatment eligibility and enrollment settings
-    max_returns = 3
+    max_returns = 15
     str_qualifying_for_treatment = (
         "bool_left == 0 "
-        + "& bool_in_probation == 1"
+        + "& stage == 'p'"
         + "& bool_can_be_treated == 1"
         + "& has_been_treated == 0"
     )
-    str_current_enroll = "bool_left == 0 & bool_treat == 1 & bool_in_probation == 1"
+    str_current_enroll = "bool_left == 0 & bool_treat == 1 & stage == 'p'"
+    # Boolean flags
     bool_return_can_be_treated = 1
     bool_keep_treatment_effect = 1
+    bool_has_incarceration = 1
 
     # Data (loaded once)
     _data_loaded = False
@@ -86,7 +88,7 @@ class SimulationSetup:
         if self.dbg == 1:
             self.beta_arrival = 10
             self.p_length = 250
-            self.T_max = 10000
+            self.T_max = 1000
 
         self._load_data()
         self._print_summary()
@@ -115,6 +117,7 @@ class SimulationSetup:
         print(f"  effect:            {self.treatment_effect}")
         print(f"  max_returns:       {self.max_returns}")
         print(f"  return_can_treat:  {self.bool_return_can_be_treated}")
+        print(f"  has_incarceration: {self.bool_has_incarceration}")
         print(f"  qualifying:        {self.str_qualifying_for_treatment}")
         print(f"  current_enroll:    {self.str_current_enroll}")
         print("-" * 60)
@@ -128,6 +131,10 @@ class SimulationSetup:
         print("State Space:")
         print(f"  dimensions:        {state_dims}")
         print(f"  n_states:          {len(self.state_defs.state_key_range)}")
+        print(
+            f"  state weights : (produce state score) \n\t {self.simulator.state_defs.scoring_weights}"
+        )
+        print(f"  final weights:           {self.simulator._scoring_weights}")
         print("=" * 60)
 
     def _load_data(self, ignore_communities=True):
@@ -147,7 +154,6 @@ class SimulationSetup:
             state_defs=self.state_defs,
         )
         simulation.refit_baseline(self.simulator, self.df_individual, **self.fit_kwargs)
-
         # Filter by communities
         self.dfc = self.df_community[
             self.df_community.index.isin(self.communities)
@@ -164,17 +170,22 @@ class SimulationSetup:
                 self.df_individual["code_county"].isin(self.communities)
             ]
 
+        # here we should assign a few neede new items
         self.dfi = (
             _valid_population.reset_index(drop=True)
             .copy()
             .assign(
-                bool_in_probation=1,
+                stage="p",
+                has_been_treated=0,  # whether the individual has been treated
                 state=lambda x: x.apply(
                     lambda row: self.state_defs.get_state(row), axis=1
                 ),
                 score_state=lambda x: x.apply(
                     lambda row: self.state_defs.get_score(row), axis=1
                 ),
+                score_treatment=0.0,
+            )
+            .assign(
                 score=lambda x: x.apply(
                     lambda row: self.simulator.produce_score(row.name, x), axis=1
                 ),
@@ -191,9 +202,6 @@ class SimulationSetup:
     def assign_weights(self):
         """Assign weights to the individuals so I sample according to the weights."""
         self.dfi["weight"] = 1.0
-
-        # young age / large weights
-        # self.dfi["weight"] = self.dfi["age"].apply(lambda x: 100 - x)
 
         return self.dfi
 
@@ -250,6 +258,7 @@ def run_sim(
         str_current_enroll=settings.str_current_enroll,
         bool_return_can_be_treated=settings.bool_return_can_be_treated,
         max_returns=settings.max_returns,
+        bool_has_incarceration=settings.bool_has_incarceration,
     )
     if verbosity > 0:
         print(
@@ -297,7 +306,6 @@ def run_name(name, repeat=3, start=0, output_dir="results", settings=None):
             settings=settings,
         )
         dump_rep_metrics(sim, rep_dir, settings.p_freeze)
-        # sim goes out of scope and can be garbage collected
 
     return repeat
 
@@ -328,7 +336,7 @@ thres_cutoff = {
     2: 1,  # if in age-group 2, cut-off below 2
     3: 2,  # if in age-group 3, cut-off below 3
     4: 3,
-    5: 4,
+    5: 6,
     6: 10,
 }
 
@@ -363,18 +371,18 @@ def get_tests(settings=None):
                 ascending=True,
             ),
         ),
-        # "low-age-high-prev": (
-        #     smt.treatment_rule_priority,
-        #     dict(
-        #         key="_new_prior",
-        #         capacity=settings.treatment_capacity,
-        #         ascending=True,
-        #         effect=settings.treatment_effect,
-        #         to_compute=lambda df: df.apply(
-        #             lambda row: (row["age_dist"], -row["felony_arrest"]), axis=1
-        #         ),
-        #     ),
-        # ),
+        "age-first": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: (row["age"], -row["felony_arrest"]), axis=1
+                ),
+            ),
+        ),
         # "low-age-low-prev": (
         #     smt.treatment_rule_priority,
         #     dict(

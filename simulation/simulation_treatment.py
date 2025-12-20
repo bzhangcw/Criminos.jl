@@ -61,12 +61,6 @@ def batch_treatment_rule(func):
         if len(idx_selected) == 0:
             return []
 
-        # Apply treatment to selected
-        dfi.loc[idx_selected, "bool_treat"] = 1.0
-        dfi.loc[idx_selected, "treat_start"] = t
-        dfi.loc[idx_selected, "has_been_treated"] = 1.0
-        dfi.loc[idx_selected, "num_treated"] += 1
-
         return idx_selected
 
     return wrapper

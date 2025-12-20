@@ -612,9 +612,29 @@ def evaluation_metrics(results_df):
 
     for df in results_df:
         # Index is state tuple - convert to 2D array (n_states x n_dims)
-        idx_arr = np.array(
-            [list(i) if hasattr(i, "__iter__") else [i] for i in df.index]
-        )
+        # Handle mixed types (numbers and strings) by converting strings to codes
+        idx_raw = [list(i) if hasattr(i, "__iter__") else [i] for i in df.index]
+
+        # Convert each element to numeric (encode strings as numbers)
+        idx_numeric = []
+        for state_tuple in idx_raw:
+            numeric_tuple = []
+            for val in state_tuple:
+                if isinstance(val, str):
+                    # Encode string values: 'p' -> 0, 'f' -> 1 (for stage)
+                    # This is a simple encoding scheme
+                    if val == "p":
+                        numeric_tuple.append(0)
+                    elif val == "f":
+                        numeric_tuple.append(1)
+                    else:
+                        # For any other string, use hash or ordinal
+                        numeric_tuple.append(ord(val[0]) if len(val) > 0 else 0)
+                else:
+                    numeric_tuple.append(float(val))
+            idx_numeric.append(numeric_tuple)
+
+        idx_arr = np.array(idx_numeric)
         tau = df["tau"].values if "tau" in df.columns else np.zeros(len(df))
         tau_rel = df["tau_rel"].values if "tau_rel" in df.columns else np.zeros(len(df))
         index_list.append(idx_arr)
