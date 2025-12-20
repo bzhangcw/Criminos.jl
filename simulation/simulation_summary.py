@@ -559,7 +559,7 @@ def plot_to_tex_equilibrium_box(
 
     # Create box plot
     fig, ax = plt.subplots(
-        figsize=(max(6, len(labels) * 1.2), 5),
+        figsize=(max(6, len(labels) * 1.2), 3.5),
     )
 
     # Use empty labels if show_labels is False

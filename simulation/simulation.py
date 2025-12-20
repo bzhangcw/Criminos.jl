@@ -727,7 +727,7 @@ class Simulator(object):
                 # ------------------------------------------------------------
                 _bool_off_probation = dfi.loc[idx, "stage"] == "f"
                 _bool_is_incarceration_event = (dfi.loc[idx, "prison_rate"] > 0) and (
-                    np.random.uniform(0, 1) < dfi.loc[idx, "prison_rate"] * 0.1
+                    np.random.uniform(0, 1) < dfi.loc[idx, "prison_rate"] * 0.01
                 )
                 _bool_should_be_incarcerated = _bool_is_incarceration_event or (
                     _bool_off_probation  # it is off probation and returned too many times

@@ -56,7 +56,7 @@ class SimulationSetup:
     )
 
     # Treatment eligibility and enrollment settings
-    max_returns = 15
+    max_returns = 25
     str_qualifying_for_treatment = (
         "bool_left == 0 "
         + "& stage == 'p'"
