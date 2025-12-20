@@ -261,22 +261,6 @@ class Simulator(object):
         "return_times",  # number of times the individual has returned to the community
     ]
 
-    SCORING_COLUMNS = ["score_fixed", "score_comm"]
-    TRAJECTORY_COLUMNS = [
-        "index",
-        "snap",
-        "arrival",
-        "leaving",
-        "ep_arrival",
-        "ep_leaving",
-        "ep_lastre",
-        "felony_arrest_lst",
-        "felony_arrest",
-        "bool_treat",
-        "bool_treat_made",
-        "type_left",
-    ]
-
     def __init__(
         self,
         eval_score_fixed,
@@ -727,7 +711,7 @@ class Simulator(object):
                 # ------------------------------------------------------------
                 _bool_off_probation = dfi.loc[idx, "stage"] == "f"
                 _bool_is_incarceration_event = (dfi.loc[idx, "prison_rate"] > 0) and (
-                    np.random.uniform(0, 1) < dfi.loc[idx, "prison_rate"] * 0.1
+                    np.random.uniform(0, 1) < dfi.loc[idx, "prison_rate"] * 0.9
                 )
                 _bool_should_be_incarcerated = _bool_is_incarceration_event or (
                     _bool_off_probation  # it is off probation and returned too many times
