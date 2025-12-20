@@ -554,12 +554,14 @@ def evaluation_metrics(results_df):
     Returns dict with vectors (one value per episode):
         - total_population: total individuals present (sum of x0)
         - total_offenses: total recidivism events (sum of yin)
+        - total_offenses_treated: offenses by individuals with has_been_treated==1
         - total_enrollment: total treated individuals (sum of tau)
         - total_arrivals: new arrivals (sum of lmd)
         - total_departures: left system (sum of lv)
         - total_incarcerated: incarcerated during period (sum of inc)
         - total_returns: number of returns during period (sum of nr)
         - offense_rate: offenses / population
+        - offense_rate_treated: offenses by treated / population
         - enrollment_rate: enrolled / population
         - incarceration_rate: incarcerated / population
         - return_rate: returns / population
@@ -567,12 +569,14 @@ def evaluation_metrics(results_df):
     metrics = {
         "total_population": [],
         "total_offenses": [],
+        "total_offenses_treated": [],
         "total_enrollment": [],
         "total_arrivals": [],
         "total_departures": [],
         "total_incarcerated": [],
         "total_returns": [],
         "offense_rate": [],
+        "offense_rate_treated": [],
         "enrollment_rate": [],
         "incarceration_rate": [],
         "return_rate": [],
@@ -581,6 +585,16 @@ def evaluation_metrics(results_df):
     for df in results_df:
         pop = df["x0"].sum()
         offenses = df["yin"].sum()
+
+        # Offenses by treated individuals (filter by state where has_been_treated == 1)
+        # State tuple structure: (felony_arrest, age_dist, has_been_treated, stage)
+        # has_been_treated is at index 2
+        try:
+            offenses_treated = df[df.index.map(lambda s: s[2] == 1)]["yin"].sum()
+        except (IndexError, TypeError, KeyError):
+            # If state structure is different or has_been_treated not in state
+            offenses_treated = 0.0
+
         enrolled = df["tau"].sum()
         arrivals = df["lmd"].sum()
         departures = df["lv"].sum()
@@ -589,12 +603,16 @@ def evaluation_metrics(results_df):
 
         metrics["total_population"].append(pop)
         metrics["total_offenses"].append(offenses)
+        metrics["total_offenses_treated"].append(offenses_treated)
         metrics["total_enrollment"].append(enrolled)
         metrics["total_arrivals"].append(arrivals)
         metrics["total_departures"].append(departures)
         metrics["total_incarcerated"].append(incarcerated)
         metrics["total_returns"].append(returns)
         metrics["offense_rate"].append(offenses / pop if pop > 0 else 0.0)
+        metrics["offense_rate_treated"].append(
+            offenses_treated / pop if pop > 0 else 0.0
+        )
         metrics["enrollment_rate"].append(enrolled / pop if pop > 0 else 0.0)
         metrics["incarceration_rate"].append(incarcerated / pop if pop > 0 else 0.0)
         metrics["return_rate"].append(returns / pop if pop > 0 else 0.0)
