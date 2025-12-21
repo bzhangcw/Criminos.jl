@@ -34,11 +34,11 @@ p_freeze = 5
 T_max = 20000
 treatment_capacity = 50
 treatment_effect = 0.5
-state_defs = simulation.StateDefs(["felony_arrest", "age_dist", "bool_in_probation"])
+state_defs = simulation.StateDefs(["offenses", "age_dist", "bool_in_probation"])
 communities = {1}
 # define kwargs for refit the survival
 fit_kwargs = {
-    "new_col": "felony_arrest",
+    "new_col": "offenses",
     "bool_use_cph": False,
     "baseline": "exponential",
 }
@@ -163,7 +163,7 @@ tests = {
             capacity=treatment_capacity,
             ascending=True,
             to_compute=lambda df: df.apply(
-                lambda row: (row["age_dist"], -row["felony_arrest"]), axis=1
+                lambda row: (row["age_dist"], -row["offenses"]), axis=1
             ),
         ),
     ),
@@ -174,7 +174,7 @@ tests = {
             capacity=treatment_capacity,
             ascending=True,
             to_compute=lambda df: df.apply(
-                lambda row: (row["age_dist"], row["felony_arrest"]), axis=1
+                lambda row: (row["age_dist"], row["offenses"]), axis=1
             ),
         ),
     ),
@@ -185,7 +185,7 @@ tests = {
             capacity=treatment_capacity,
             ascending=True,
             to_compute=lambda df: df.apply(
-                lambda row: (-row["felony_arrest"], row["age_dist"]), axis=1
+                lambda row: (-row["offenses"], row["age_dist"]), axis=1
             ),
         ),
     ),

@@ -152,7 +152,7 @@ class StateVal(object):
 
 
 STATE_KEY_RANGE = {
-    "felony_arrest": list(range(11)),
+    "offenses": list(range(11)),
     "age_dist": [1, 2, 3, 4, 5, 6],  # ignore 0
     "has_been_treated": [0, 1],
     "stage": ["p", "f"],
@@ -161,7 +161,7 @@ DEFAULT_SCORING_STATE_PARAMS = {
     "score_fixed": 0.7904,
     "score_comm": 0.7904,
     "score_age_dist": 0.7904,
-    "score_felony_arrest": 0.1884,
+    "score_offenses": 0.1884,
 }
 
 
@@ -228,7 +228,7 @@ class StateDefs(object):
         Update the covariates and the corresponding scores of the individual.
         This includes:
         1. age, age_dist, and score_age_dist.
-        2. felony_arrest, and score_felony_arrest.
+        2. offenses, and score_offenses.
         """
         dfi.loc[idx, "age"] = (
             dfi.loc[idx, "age_start"] + (t - dfi.loc[idx, "arrival"]) / 365.0
@@ -240,8 +240,8 @@ class StateDefs(object):
         #     dfi.loc[idx, "age_dist"]
         # )
         dfi.loc[idx, "score_age_dist"] = sirakaya.score_age(dfi.loc[idx, "age"])
-        # the score of felony_arrest is just itself
-        dfi.loc[idx, "score_felony_arrest"] = dfi.loc[idx, "felony_arrest"]
+        # the score of offenses is just itself
+        dfi.loc[idx, "score_offenses"] = dfi.loc[idx, "offenses"]
 
 
 class Simulator(object):
@@ -268,7 +268,7 @@ class Simulator(object):
         func_arrival=None,
         func_end_probation=None,
         func_leaving=None,
-        state_defs=StateDefs(["felony_arrest"]),
+        state_defs=StateDefs(["offenses"]),
         bool_keep_full_trajectory=True,
     ):
         self.eval_score_fixed = eval_score_fixed
@@ -379,6 +379,7 @@ class Simulator(object):
         str_qualifying_for_treatment="",
         str_current_enroll="",
         max_returns=3,
+        max_offenses=15,
         bool_return_can_be_treated=1,
         bool_has_incarceration=True,
     ):
@@ -426,7 +427,7 @@ class Simulator(object):
         - num_n_y: Counts by community outcomes
         - num_n_time: Time-based statistics
         - num_n_mu: Mean statistics
-        - num_n_mean_arrest: Mean arrest statistics
+        - num_n_mean_offenses: Mean arrest statistics
         ...
         ----------------------------------------------------------------------
         """
@@ -461,7 +462,7 @@ class Simulator(object):
         dfi["ep_end_probation"] = 1e6
         dfi["age_start"] = dfi["age"].copy()
         dfi["age_dist_start"] = dfi["age_dist"].copy()
-        dfi["prio_arrest"] = dfi["felony_arrest"].copy()
+        dfi["prio_offenses"] = dfi["offenses"].copy()
         dfi["stage"] = "p"
         dfi["score_stage"] = 1.0  # 1.0 for probation stage
         dfi["state_lst"] = dfi["state"].apply(lambda x: StateVal(x.value))
@@ -477,7 +478,7 @@ class Simulator(object):
         self.num_n_y = num_n_y = defaultdict(float)
         self.num_n_time = num_n_time = defaultdict(float)
         self.num_n_mu = num_n_mu = defaultdict(float)
-        self.num_n_mean_arrest = num_n_mean_arrest = defaultdict(float)
+        self.num_n_mean_offenses = num_n_mean_offenses = defaultdict(float)
         self.num_n_enrollment = num_n_enrollment = dict()
 
         self.t_dfc = t_dfc = []
@@ -597,7 +598,7 @@ class Simulator(object):
                     dfi.loc[idx, self.INITIALIZED_COLUMNS] = 0
                     dfi.loc[idx, "age_start"] = dfi.loc[idx, "age"]
                     dfi.loc[idx, "age_dist_start"] = dfi.loc[idx, "age_dist"]
-                    dfi.loc[idx, "prio_arrest"] = dfi.loc[idx, "felony_arrest"]
+                    dfi.loc[idx, "prio_offenses"] = dfi.loc[idx, "offenses"]
                     # Initialize treatment-related columns for new arrivals
                     if "has_been_treated" not in dfi.columns or pd.isna(
                         dfi.loc[idx, "has_been_treated"]
@@ -704,7 +705,9 @@ class Simulator(object):
 
                 # per-episode number of arrests
                 num_y[_row["code_county"], _row["state"], _episode] += 1
-                dfi.loc[idx, "felony_arrest"] = dfi.loc[idx, "felony_arrest"] + 1
+                dfi.loc[idx, "offenses"] = dfi.loc[idx, "offenses"] + 1
+                if dfi.loc[idx, "offenses"] > max_offenses:
+                    dfi.loc[idx, "offenses"] = max_offenses
 
                 # ------------------------------------------------------------
                 # an incarceration event?
@@ -713,9 +716,12 @@ class Simulator(object):
                 _bool_is_incarceration_event = (dfi.loc[idx, "prison_rate"] > 0) and (
                     np.random.uniform(0, 1) < dfi.loc[idx, "prison_rate"] * 0.01
                 )
-                _bool_should_be_incarcerated = _bool_is_incarceration_event or (
-                    _bool_off_probation  # it is off probation and returned too many times
-                    and dfi.loc[idx, "return_times"] >= max_returns
+                _bool_off_probation_and_returned_too_many_times = (
+                    _bool_off_probation and dfi.loc[idx, "return_times"] >= max_returns
+                )
+                _bool_should_be_incarcerated = (
+                    _bool_is_incarceration_event
+                    or _bool_off_probation_and_returned_too_many_times
                 )
                 if _bool_should_be_incarcerated and bool_has_incarceration:
                     _incarceration = self.__default_incarceration(dfi.loc[idx], t)
@@ -814,8 +820,8 @@ class Simulator(object):
 
                     # computation of the mean re-arrest time
                     # for each cid, just accumulate the time and the number of arrests
-                    # mean_re_time = (accummulated) total_time / (number_of_arrests + 1e-10)
-                    dfc.loc[_cid, "mean_re_time"] = num_n_mean_arrest[
+                    # mean_re_time = (accummulated) total_time / (number_of_offensess + 1e-10)
+                    dfc.loc[_cid, "mean_re_time"] = num_n_mean_offenses[
                         _cid, _episode
                     ] = num_n_time[_cid] / (num_n_y[_cid] + 1e-10)
 

@@ -26,7 +26,7 @@ def summarize_trajectory(
     For each period p (starting from 1):
     - x0: population at start of period (from snapshot p-1), grouped by state at p-1
     - x: population at end of period (from snapshot p), grouped by state at p
-    - y: offenses = j_p - j_{p-1} (difference in felony_arrest)
+    - y: offenses = j_p - j_{p-1} (difference in offenses)
     - y_out: offenses aggregated by state at p-1 (outflow from state)
     - y_in: offenses aggregated by state at p (inflow to state)
     """
@@ -88,14 +88,14 @@ def summarize_trajectory(
         # Get individuals present in both periods
         idx_common = df_presence_begin.index.intersection(df_curr.index)
 
-        # Create merged df with state at p-1, state at p, and felony_arrest at both
+        # Create merged df with state at p-1, state at p, and offenses at both
         df_merged = pd.DataFrame(
             {
                 "index": idx_common,
                 "state_prev": df_prev.loc[idx_common, "state"],
                 "state_curr": df_curr.loc[idx_common, "state"],
-                "j_prev": df_prev.loc[idx_common, "felony_arrest"],
-                "j_curr": df_curr.loc[idx_common, "felony_arrest"],
+                "j_prev": df_prev.loc[idx_common, "offenses"],
+                "j_curr": df_curr.loc[idx_common, "offenses"],
             }
         ).assign(offenses=lambda df: df["j_curr"] - df["j_prev"])
 
@@ -587,7 +587,7 @@ def evaluation_metrics(results_df):
         offenses = df["yin"].sum()
 
         # Offenses by treated individuals (filter by state where has_been_treated == 1)
-        # State tuple structure: (felony_arrest, age_dist, has_been_treated, stage)
+        # State tuple structure: (offenses, age_dist, has_been_treated, stage)
         # has_been_treated is at index 2
         try:
             offenses_treated = df[df.index.map(lambda s: s[2] == 1)]["yin"].sum()

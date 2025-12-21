@@ -113,6 +113,7 @@ def load_data(datadir="./"):
     df_individual = df.assign(
         rel_pstart=lambda df: df["pstart"] - min_pstart,
         rel_probation=lambda df: df["probation_term"] * 30,
+        offenses=lambda df: df["felony_arrest"].apply(np.round),
     )[
         [
             "observed",
@@ -120,7 +121,7 @@ def load_data(datadir="./"):
             "code_county",
             "rel_pstart",
             "rel_probation",
-            "felony_arrest",
+            "offenses",
             "age_dist",
             "score_fixed",
             "score_age_dist",
@@ -134,8 +135,8 @@ def load_data(datadir="./"):
         age=lambda x: x["age_dist"].apply(sirakaya.age_dist_to_age),
     )
     # avoid float after imputation
-    df_individual["felony_arrest"] = df_individual["felony_arrest"].apply(np.round)
-    df_individual["score_felony_arrest"] = df_individual["felony_arrest"]
+    df_individual["offenses"] = df_individual["offenses"].apply(np.round)
+    df_individual["score_offenses"] = df_individual["offenses"]
 
     return dfr, df, df_individual, df_community
 

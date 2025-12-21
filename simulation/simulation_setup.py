@@ -33,30 +33,31 @@ class SimulationSetup:
     """Configuration class for simulation parameters."""
 
     # Default values
-    p_length = 200
+    p_length = 400
     p_freeze = 0
-    T_max = 30000
+    T_max = 40000
     treatment_capacity = 80
     treatment_effect = 0.5
     """@note: try not change to 1
     1: vital for memory need about 5G RAM
     2: 1 will be very slow to converge (need many epochs))
     """
-    beta_arrival = 2
+    beta_arrival = 5
     communities = {1}
     rel_off_probation = 2000
     fit_kwargs = {
-        "new_col": "felony_arrest",
+        "new_col": "offenses",
         "bool_use_cph": False,
         "baseline": "exponential",
     }
     func_to_call = simulation.arrival_constant
     state_defs = simulation.StateDefs(
-        ["felony_arrest", "age_dist", "has_been_treated", "stage"]
+        ["offenses", "age_dist", "has_been_treated", "stage"]
     )
 
     # Treatment eligibility and enrollment settings
-    max_returns = 25
+    max_returns = 30
+    max_offenses = 35
     str_qualifying_for_treatment = (
         "bool_left == 0 "
         + "& stage == 'p'"
@@ -116,6 +117,7 @@ class SimulationSetup:
         print(f"  capacity:          {self.treatment_capacity} per episode")
         print(f"  effect:            {self.treatment_effect}")
         print(f"  max_returns:       {self.max_returns}")
+        print(f"  max_offenses:      {self.max_offenses}")
         print(f"  return_can_treat:  {self.bool_return_can_be_treated}")
         print(f"  has_incarceration: {self.bool_has_incarceration}")
         print(f"  qualifying:        {self.str_qualifying_for_treatment}")
@@ -258,6 +260,7 @@ def run_sim(
         str_current_enroll=settings.str_current_enroll,
         bool_return_can_be_treated=settings.bool_return_can_be_treated,
         max_returns=settings.max_returns,
+        max_offenses=settings.max_offenses,
         bool_has_incarceration=settings.bool_has_incarceration,
     )
     if verbosity > 0:
@@ -379,7 +382,7 @@ def get_tests(settings=None):
                 ascending=True,
                 effect=settings.treatment_effect,
                 to_compute=lambda df: df.apply(
-                    lambda row: (row["age"], -row["felony_arrest"]), axis=1
+                    lambda row: (row["age"], -row["offenses"]), axis=1
                 ),
             ),
         ),
@@ -391,7 +394,7 @@ def get_tests(settings=None):
         #         ascending=True,
         #         effect=settings.treatment_effect,
         #         to_compute=lambda df: df.apply(
-        #             lambda row: (row["age_dist"], row["felony_arrest"]), axis=1
+        #             lambda row: (row["age_dist"], row["offenses"]), axis=1
         #         ),
         #     ),
         # ),
@@ -410,8 +413,7 @@ def get_tests(settings=None):
                 key="score",
                 capacity=settings.treatment_capacity,
                 ascending=False,
-                exclude=lambda row: row["felony_arrest"]
-                < thres_cutoff[row["age_dist"]],
+                exclude=lambda row: row["offenses"] < thres_cutoff[row["age_dist"]],
             ),
         ),
         "high-risk-lean-young": (
