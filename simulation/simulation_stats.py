@@ -739,7 +739,7 @@ def recover_treatment_decision_as_df(metrics, rep=None):
 def compute_equilibrium_treatment_stats(all_metrics, metric_key="tau", last_n=10):
     """
     Compute equilibrium average of a metric over the last N episodes across all reps.
-    Only considers states where bool_in_probation == 1 (last index level), then drops it.
+    Only considers states where stage == 'p' (probation, encoded as 0).
 
     Args:
         all_metrics: dict from read_metrics_from_h5 containing treatment fields:
@@ -751,11 +751,16 @@ def compute_equilibrium_treatment_stats(all_metrics, metric_key="tau", last_n=10
         last_n: number of episodes from the end to average over (default 10)
 
     Returns:
-        (df_mean, df_std): two DataFrames with:
-            - rows = age (second dim of state)
-            - columns = number of offenses (first dim of state)
+        (df_mean, df_std, df_mean_raw, df_std_raw): four DataFrames with:
+            - rows = age_dist (second dim of state)
+            - columns = offenses (first dim of state)
             - df_mean: normalized so all cells sum to 1
             - df_std: each cell scaled by its mean value (coefficient of variation)
+            - df_mean_raw: raw mean values before normalization
+            - df_std_raw: raw std values before scaling
+
+    Note: State structure is (offenses, age_dist, has_been_treated, stage_encoded)
+          where stage_encoded: 0='p' (probation), 1='f' (off-probation)
     """
     index_flat_list = all_metrics["treatment_index_flat"]
     tau_flat_list = all_metrics["treatment_tau_flat"]
@@ -790,7 +795,9 @@ def compute_equilibrium_treatment_stats(all_metrics, metric_key="tau", last_n=10
         cum_lengths = np.cumsum(lengths)
         start_indices = np.concatenate([[0], cum_lengths[:-1]])
 
-        # Collect data for last_n episodes, grouped by state (excluding bool_in_probation)
+        # Collect data for last_n episodes, grouped by state
+        # State structure: (offenses, age_dist, has_been_treated, stage_encoded)
+        # Filter: only probation stage (stage_encoded == 0, which means 'p')
         state_metric = defaultdict(list)
 
         for ep in range(ep_start, n_episodes):
@@ -799,44 +806,44 @@ def compute_equilibrium_treatment_stats(all_metrics, metric_key="tau", last_n=10
 
             for i in range(start_idx, end_idx):
                 state_tuple = tuple(index_flat[i])
-                # Filter: only in probation (last index == 1)
-                if state_tuple[-1] != 1:
+                # Filter: only in probation (stage_encoded == 0 means 'p')
+                if len(state_tuple) >= 4 and state_tuple[3] != 0:
                     continue
-                # Drop last index level (bool_in_probation)
-                state_key = state_tuple[:-1]
+                # Use (offenses, age_dist) as key, ignoring has_been_treated and stage
+                state_key = (state_tuple[0], state_tuple[1])
                 state_metric[state_key].append(metric_flat[i])
 
         # Average over episodes for this rep, store per state
         for state_key in state_metric:
             state_data[state_key].append(np.mean(state_metric[state_key]))
 
-    # Build result: rows = age, columns = offenses
-    # state_key = (offenses, age)
+    # Build result: rows = age_dist, columns = offenses
+    # state_key = (offenses, age_dist)
     offenses_set = set()
-    age_set = set()
+    age_dist_set = set()
     for state_key in state_data:
         offenses_set.add(state_key[0])
-        age_set.add(state_key[1])
+        age_dist_set.add(state_key[1])
 
     offenses_sorted = sorted(offenses_set)
-    age_sorted = sorted(age_set)
+    age_dist_sorted = sorted(age_dist_set)
 
     # Create mean and std matrices
     mean_data = {off: {} for off in offenses_sorted}
     std_data = {off: {} for off in offenses_sorted}
 
     for state_key, values in state_data.items():
-        offenses, age = state_key
+        offenses, age_dist = state_key
         arr = np.array(values)
-        mean_data[offenses][age] = np.mean(arr)
-        std_data[offenses][age] = np.std(arr)
+        mean_data[offenses][age_dist] = np.mean(arr)
+        std_data[offenses][age_dist] = np.std(arr)
 
-    # Build DataFrames: rows = age, columns = offenses
+    # Build DataFrames: rows = age_dist, columns = offenses
     df_mean_raw = pd.DataFrame(
-        mean_data, index=age_sorted, columns=offenses_sorted
+        mean_data, index=age_dist_sorted, columns=offenses_sorted
     ).fillna(0)
     df_std_raw = pd.DataFrame(
-        std_data, index=age_sorted, columns=offenses_sorted
+        std_data, index=age_dist_sorted, columns=offenses_sorted
     ).fillna(0)
 
     # Normalize mean_df so all cells sum to 1
@@ -846,9 +853,9 @@ def compute_equilibrium_treatment_stats(all_metrics, metric_key="tau", last_n=10
     # Scale std_df by mean values (coefficient of variation)
     df_std = df_std_raw / df_mean_raw.replace(0, np.nan)
 
-    df_mean.index.name = "age"
+    df_mean.index.name = "age_dist"
     df_mean.columns.name = "offenses"
-    df_std.index.name = "age"
+    df_std.index.name = "age_dist"
     df_std.columns.name = "offenses"
 
     return df_mean, df_std, df_mean_raw, df_std_raw
