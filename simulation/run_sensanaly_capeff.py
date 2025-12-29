@@ -11,14 +11,17 @@ This script demonstrates how to:
 from sensanaly_capeff import analyze_sensitivity, plot_all_effects
 import pandas as pd
 import os
+import sys
 
 # Configuration
-results_dir = "result-capa-eff"
+results_dir = sys.argv[1]
 metrics = [
     "offense_rate",
     "incarceration_rate",
 ]
-policies = ["null", "high-risk", "low-risk"]
+# policies = ["null", "high-risk", "low-risk", "age-first", "age-first-high-risk"]
+# policies = ["null", "high-risk", "low-risk", "age-first-high-risk"]
+policies = ["null", "high-risk", "low-risk", "age-first"]
 summary_wd = 20  # Window size for computing equilibrium (last N periods)
 
 print("=" * 60)
@@ -58,7 +61,14 @@ plot_all_effects(
     policies=policies,
     show_std=True,
 )
-
+plot_all_effects(
+    dfs=dfs,
+    output_dir=output_dir,
+    policies=policies,
+    show_std=True,
+    relative=True,
+    relative_policy="null",
+)
 print("\n" + "=" * 60)
 print(f"All results saved to {output_dir}/")
 print("=" * 60)

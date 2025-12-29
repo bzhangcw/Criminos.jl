@@ -11,14 +11,17 @@ This script demonstrates how to:
 from sensanaly_prscale import analyze_sensitivity, plot_all_term_lengths
 import pandas as pd
 import os
+import sys
 
 # Configuration
-results_dir = "result-ofpl-scl-4"
+results_dir = sys.argv[1]
 metrics = [
     "offense_rate",
     "incarceration_rate",
 ]
-policies = ["high-risk", "low-risk", "age-first"]
+# policies = ["null", "high-risk", "low-risk", "age-first", "age-first-high-risk"]
+# policies = ["null", "high-risk", "low-risk", "age-first-high-risk"]
+policies = ["null", "high-risk", "low-risk", "age-first"]
 summary_wd = 20  # Window size for computing equilibrium (last N periods)
 
 print("=" * 60)
@@ -57,7 +60,19 @@ plot_all_term_lengths(
     output_dir=output_dir,
     policies=policies,
     show_std=True,
+    scale=0.12,
+    relative=True,  # Plot differences from baseline
+    relative_policy="null",  # Use "null" policy as baseline (default)
 )
+plot_all_term_lengths(
+    dfs=dfs,
+    output_dir=output_dir,
+    policies=policies,
+    show_std=True,
+    scale=0.12,
+    relative=False,
+)
+
 
 print("\n" + "=" * 60)
 print(f"All results saved to {output_dir}/")

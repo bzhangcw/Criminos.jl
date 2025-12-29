@@ -64,6 +64,7 @@ from simulation_stats import (
     evaluation_metrics,
     recover_treatment_decision_as_df,
 )
+import simulation_regression as simr
 import simulation_treatment as simt
 import simulation_stats as sims
 

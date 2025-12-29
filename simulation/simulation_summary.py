@@ -38,16 +38,40 @@ POLICY_COLORS = {
     # priority policies; will exhaust the capacity
     # ------------------------------------------------------------
     "high-risk": "#d62728",  # red
-    "low-risk": "#ff7f0e",  # orange
+    "low-risk": "#546de5",  # green
     "high-risk-only-young": "#e377c2",  # pink
     "high-risk-lean-young": "#2ca02c",  # green
     "age-tolerance": "#17becf",  # cyan
-    "age-first": "#17becf",  # green
+    "age-first": "#51a3e6",  # soft blue
+    "age-first-high-risk": "#e67051",  # soft red
     # ------------------------------------------------------------
     # fluid policies; may not exhaust the capacity
     # ------------------------------------------------------------
     "fluid-low-age-low-prev": "#1f77b4",  # blue
     "fluid-low-age-threshold-offenses": "#2ca02c",  # green
+}
+POLICY_ALIAS = {
+    "age-first": "age-first-low-risk",
+}
+
+# Hatch patterns for legend: policies starting with "age-" get dashed pattern
+# See matplotlib hatch patterns: '/', '\\', '|', '-', '+', 'x', 'o', 'O', '.', '*'
+POLICY_HATCHES = {
+    "age-tolerance": "//",
+    "age-first": "//",
+    "age-first-high-risk": "//",
+    "fluid-low-age-low-prev": "//",
+    "fluid-low-age-threshold-offenses": "//",
+}
+
+# Line styles for plotting series: policies starting with "age-" get dashed lines
+# See matplotlib linestyles: '-' (solid), '--' (dashed), '-.' (dashdot), ':' (dotted)
+POLICY_LINESTYLES = {
+    "age-tolerance": "--",
+    "age-first": "--",
+    "age-first-high-risk": "--",
+    "fluid-low-age-low-prev": "--",
+    "fluid-low-age-threshold-offenses": "--",
 }
 
 
@@ -60,6 +84,34 @@ def get_policy_color(policy_name, fallback_idx=0):
     # Fallback to tab10 colors
     colors = plt.cm.tab10.colors
     return colors[fallback_idx % len(colors)]
+
+
+def get_policy_hatch(policy_name):
+    """Get hatch pattern for a policy name.
+
+    Returns hatch pattern if defined in POLICY_HATCHES,
+    or '//' for policies starting with 'age-', otherwise None (solid fill).
+    """
+    if policy_name in POLICY_HATCHES:
+        return POLICY_HATCHES[policy_name]
+    # Default: age- policies get dashed hatch, others get solid fill
+    if policy_name.startswith("age-"):
+        return "//"
+    return None
+
+
+def get_policy_linestyle(policy_name):
+    """Get line style for a policy name.
+
+    Returns linestyle if defined in POLICY_LINESTYLES,
+    or '--' for policies starting with 'age-', otherwise '-' (solid line).
+    """
+    if policy_name in POLICY_LINESTYLES:
+        return POLICY_LINESTYLES[policy_name]
+    # Default: age- policies get dashed lines, others get solid lines
+    if policy_name.startswith("age-"):
+        return "--"
+    return "-"
 
 
 # ------------------------------------------------------------
@@ -778,6 +830,8 @@ def plot_policy_legend(
     figsize=None,
     alpha=0.6,
     columnspacing=1.0,
+    style="line",
+    linewidth=6,
 ):
     """
     Create a standalone legend figure showing policy colors.
@@ -792,29 +846,54 @@ def plot_policy_legend(
         figsize: tuple (width, height) in inches (default: auto)
         alpha: transparency for patches (default 0.6 to match box plots)
         columnspacing: space between columns in legend (default: 1.0, smaller = closer)
+        style: "line" for line series legends, "patch" for box plot legends (default: "line")
+        linewidth: line width for line style legends (default: 2)
 
     Returns:
         matplotlib figure object
     """
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+    import matplotlib.lines as mlines
     import matplotlib.colors as mcolors
 
     if policy_names is None:
         policy_names = list(POLICY_COLORS.keys())
 
-    # Create legend handles with alpha matching box plots
+    # Create legend handles
     handles = []
     for i, name in enumerate(policy_names):
-        color = get_policy_color(name, fallback_idx=i)
-        # Convert to RGBA with alpha
-        if isinstance(color, str) and color.startswith("#"):
-            rgb = mcolors.hex2color(color)
-            facecolor = (*rgb, alpha)
+        if name in POLICY_ALIAS:
+            real_name = POLICY_ALIAS[name]
         else:
-            facecolor = (*color[:3], alpha)
-        patch = mpatches.Patch(facecolor=facecolor, edgecolor=color, label=name)
-        handles.append(patch)
+            real_name = name
+        color = get_policy_color(name, fallback_idx=i)
+
+        if style == "line":
+            # Line style for series plots
+            linestyle = get_policy_linestyle(name)
+            line = mlines.Line2D(
+                [],
+                [],
+                color=color,
+                linestyle=linestyle,
+                linewidth=linewidth,
+                label=real_name,
+            )
+            handles.append(line)
+        else:
+            # Patch style for box plots
+            hatch = get_policy_hatch(name)
+            # Convert to RGBA with alpha
+            if isinstance(color, str) and color.startswith("#"):
+                rgb = mcolors.hex2color(color)
+                facecolor = (*rgb, alpha)
+            else:
+                facecolor = (*color[:3], alpha)
+            patch = mpatches.Patch(
+                facecolor=facecolor, edgecolor=color, hatch=hatch, label=name
+            )
+            handles.append(patch)
 
     # Determine layout
     if ncol is None:

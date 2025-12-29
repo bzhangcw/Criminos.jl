@@ -62,6 +62,7 @@ class SimulationSetup:
             "new_col": "offenses",
             "bool_use_cph": False,
             "baseline": "exponential",
+            # "baseline": "breslow",
         }
         self.func_to_call = simulation.arrival_constant
         self.state_defs = simulation.StateDefs(
@@ -315,6 +316,18 @@ def get_tests(settings=None):
                 effect=settings.treatment_effect,
                 to_compute=lambda df: df.apply(
                     lambda row: (row["age"], row["offenses"]), axis=1
+                ),
+            ),
+        ),
+        "age-first-high-risk": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: (row["age"], -row["offenses"]), axis=1
                 ),
             ),
         ),

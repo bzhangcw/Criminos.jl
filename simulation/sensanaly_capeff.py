@@ -16,7 +16,8 @@ from typing import List, Dict, Tuple, Optional
 import warnings
 
 # Import existing functionality
-from simulation_summary import read_metrics_from_h5, get_policy_color
+from simulation_summary import read_metrics_from_h5
+from simulation_sensanaly import compute_equilibrium_value, plot_sensitivity_trends
 
 
 def parse_directory_structure(
@@ -92,37 +93,6 @@ def load_policy_metrics(
         )
 
     return read_metrics_from_h5(policy_name, output_dir)
-
-
-def compute_equilibrium_value(
-    policy_metrics: Dict, metric_key: str, num_period_window: int
-) -> np.ndarray:
-    """
-    Compute equilibrium value by summing over last num_period_window periods.
-
-    Args:
-        policy_metrics: Dict from read_metrics_from_h5 with 2D arrays
-        metric_key: Name of metric to compute (e.g., 'total_offenses')
-        num_period_window: Number of periods to sum over
-
-    Returns:
-        Array of values, one per repetition (shape: n_reps,)
-    """
-    if metric_key not in policy_metrics:
-        raise ValueError(f"Metric '{metric_key}' not found in policy_metrics")
-
-    data = policy_metrics[metric_key]
-
-    if not isinstance(data, np.ndarray) or data.ndim != 2:
-        raise ValueError(
-            f"Expected 2D array for metric '{metric_key}', got {type(data)} with shape {getattr(data, 'shape', 'N/A')}"
-        )
-
-    # Sum over last num_period_window periods for each repetition
-    # data shape: (n_reps, n_episodes)
-    vals = np.sum(data[:, -num_period_window:], axis=1)
-
-    return vals
 
 
 def compute_relative_performance(
@@ -283,6 +253,29 @@ def analyze_sensitivity(
     return dfs
 
 
+def compute_metric_ylim(df: pd.DataFrame, show_std: bool = True) -> Tuple[float, float]:
+    """
+    Compute consistent y-axis limits for a metric across all filter values.
+
+    Args:
+        df: DataFrame with 'mean' and optionally 'std' columns
+        show_std: Whether std bands will be shown (affects limit computation)
+
+    Returns:
+        Tuple of (ymin, ymax) with some padding
+    """
+    if show_std and "std" in df.columns:
+        ymin = (df["mean"] - df["std"]).min()
+        ymax = (df["mean"] + df["std"]).max()
+    else:
+        ymin = df["mean"].min()
+        ymax = df["mean"].max()
+
+    # Add 5% padding
+    padding = (ymax - ymin) * 0.05
+    return (ymin - padding, ymax + padding)
+
+
 def plot_capacity_trends(
     df: pd.DataFrame,
     metric_name: str,
@@ -291,6 +284,10 @@ def plot_capacity_trends(
     policies: Optional[List[str]] = None,
     ylabel: Optional[str] = None,
     show_std: bool = True,
+    ylim: Optional[Tuple[float, float]] = None,
+    zoom_margin: Optional[float] = None,
+    relative: bool = False,
+    relative_policy: str = "null",
 ):
     """
     Plot trends vs. capacity for each policy at a given effect level.
@@ -303,82 +300,26 @@ def plot_capacity_trends(
         policies: List of policies to plot (default: all in df)
         ylabel: Y-axis label (default: metric_name)
         show_std: Whether to show confidence interval region (default: True)
+        ylim: Y-axis limits as (min, max) tuple (default: None, auto)
+        zoom_margin: If set, zoom y-axis to data range with this fraction as margin (e.g., 0.1 = 10%)
+        relative: If True, plot difference from relative_policy (default: False)
+        relative_policy: Policy to use as baseline for relative plots (default: "null")
     """
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    # Filter data for the given effect
-    if effect not in df.index.get_level_values("effect"):
-        raise ValueError(f"Effect {effect} not found in data")
-
-    subset = df.loc[effect]
-
-    # Get policies to plot
-    if policies is None:
-        policies = sorted(subset.index.get_level_values("policy").unique())
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(8, 5))
-
-    # Plot each policy
-    for i, policy in enumerate(policies):
-        if policy not in subset.index.get_level_values("policy"):
-            warnings.warn(f"Policy '{policy}' not found for effect={effect}")
-            continue
-
-        policy_data = subset.xs(policy, level="policy")
-
-        # Get color
-        color = get_policy_color(policy, fallback_idx=i)
-
-        # Get data as numpy arrays
-        capacities = policy_data.index.to_numpy()
-        means = policy_data["mean"].to_numpy()
-
-        # Add confidence interval region if requested
-        if show_std and "std" in policy_data.columns:
-            stds = policy_data["std"].to_numpy()
-            ax.fill_between(
-                capacities,
-                means - stds,
-                means + stds,
-                color=color,
-                alpha=0.2,
-            )
-
-        # Plot line on top of the shaded region
-        ax.plot(
-            capacities,
-            means,
-            marker="o",
-            label=policy,
-            color=color,
-            linewidth=2,
-            markersize=6,
-        )
-
-    # Formatting
-    ax.legend(loc="best", framealpha=0.9)
-    ax.grid(True, alpha=0.3)
-
-    # Save figure in both PNG and PGF formats
-    plt.tight_layout()
-
-    # Use output_path as base (it should not have an extension)
-    # Save PNG
-    png_path = output_path + ".png"
-    plt.savefig(png_path, dpi=300, bbox_inches="tight")
-
-    # Save PGF
-    pgf_path = output_path + ".pgf"
-    plt.savefig(pgf_path, bbox_inches="tight")
-
-    plt.close()
-
-    print(f"Saved plot to {png_path} and {pgf_path}")
+    plot_sensitivity_trends(
+        df=df,
+        metric_name=metric_name,
+        filter_key="effect",
+        filter_value=effect,
+        x_key="capacity",
+        output_path=output_path,
+        policies=policies,
+        ylabel=ylabel,
+        show_std=show_std,
+        ylim=ylim,
+        zoom_margin=zoom_margin,
+        relative=relative,
+        relative_policy=relative_policy,
+    )
 
 
 def plot_all_effects(
@@ -386,6 +327,10 @@ def plot_all_effects(
     output_dir: str,
     policies: Optional[List[str]] = None,
     show_std: bool = True,
+    shared_ylim: bool = False,
+    zoom_margin: Optional[float] = None,
+    relative: bool = False,
+    relative_policy: str = "null",
 ):
     """
     Plot capacity trends for all metrics and all effect values.
@@ -395,6 +340,10 @@ def plot_all_effects(
         output_dir: Directory to save PNG and PGF files
         policies: List of policies to plot (default: all)
         show_std: Whether to show confidence interval region (default: True)
+        shared_ylim: Whether to use same y-axis limits for all plots of same metric (default: True)
+        zoom_margin: If set, zoom y-axis to data range with this fraction as margin (e.g., 0.1 = 10%)
+        relative: If True, plot difference from relative_policy (default: False)
+        relative_policy: Policy to use as baseline for relative plots (default: "null")
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -402,11 +351,22 @@ def plot_all_effects(
         # Get all effect values
         effects = sorted(df.index.get_level_values("effect").unique())
 
+        # Compute consistent y-limits for this metric if requested (only for absolute values)
+        ylim = (
+            compute_metric_ylim(df, show_std) if shared_ylim and not relative else None
+        )
+
         print(f"\nPlotting {metric_name} for {len(effects)} effect values...")
+        if shared_ylim and not relative:
+            print(f"  Using shared y-limits: {ylim}")
+        if relative:
+            print(f"  Plotting relative to '{relative_policy}'")
 
         for effect in effects:
             # Create base filename (without extension)
             filename = f"{metric_name}_effect_{effect:.1f}"
+            if relative:
+                filename += f"_rel_{relative_policy}"
             output_path = os.path.join(output_dir, filename)
 
             try:
@@ -417,6 +377,10 @@ def plot_all_effects(
                     output_path=output_path,
                     policies=policies,
                     show_std=show_std,
+                    ylim=ylim,
+                    zoom_margin=zoom_margin,
+                    relative=relative,
+                    relative_policy=relative_policy,
                 )
             except Exception as e:
                 warnings.warn(f"Failed to plot {metric_name} for effect={effect}: {e}")
