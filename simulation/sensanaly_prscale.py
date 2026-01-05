@@ -100,7 +100,12 @@ def load_policy_metrics(
 
 
 def analyze_sensitivity(
-    results_dir: str, metrics: List[str], policies: List[str], summary_wd: int
+    results_dir: str,
+    metrics: List[str],
+    policies: List[str],
+    summary_wd: int,
+    use_first: bool = False,
+    start_from: int = 0,
 ) -> Dict[str, pd.DataFrame]:
     """
     Analyze sensitivity across term length and scale factor parameters.
@@ -110,6 +115,9 @@ def analyze_sensitivity(
         metrics: List of metric names (e.g., ['total_offenses'])
         policies: List of policy names (e.g., ['high-risk', 'low-risk', 'null'])
         summary_wd: Window size for equilibrium computation (num_period_window)
+        use_first: If False (default), use last summary_wd periods (equilibrium).
+                   If True, use first summary_wd periods starting from start_from.
+        start_from: Starting period index when use_first=True (default: 0).
 
     Returns:
         dict: {metric_name: DataFrame} where each DataFrame has:
@@ -163,7 +171,11 @@ def analyze_sensitivity(
                     # Compute enrollment statistics (absolute values)
                     # Divide by summary_wd to get average per period
                     enrollment_vals = compute_equilibrium_value(
-                        policy_metrics, "total_enrollment", summary_wd
+                        policy_metrics,
+                        "total_enrollment",
+                        summary_wd,
+                        use_first,
+                        start_from,
                     )
                     enrollment_mean = float(np.mean(enrollment_vals)) / summary_wd
                     enrollment_std = float(np.std(enrollment_vals)) / summary_wd
@@ -171,9 +183,13 @@ def analyze_sensitivity(
                     # Compute statistics for each metric
                     for metric in metrics:
                         try:
-                            # Compute equilibrium values (sum over summary_wd periods)
+                            # Compute values (sum over summary_wd periods)
                             policy_vals = compute_equilibrium_value(
-                                policy_metrics, metric, summary_wd
+                                policy_metrics,
+                                metric,
+                                summary_wd,
+                                use_first,
+                                start_from,
                             )
 
                             # Compute absolute statistics (averaged per period)
@@ -336,7 +352,9 @@ def plot_all_term_lengths(
         term_lengths = sorted(df.index.get_level_values("term_length").unique())
 
         # Compute consistent y-limits for this metric if requested (only for absolute values)
-        ylim = compute_metric_ylim(df, show_std) if shared_ylim and not relative else None
+        ylim = (
+            compute_metric_ylim(df, show_std) if shared_ylim and not relative else None
+        )
 
         print(f"\nPlotting {metric_name} for {len(term_lengths)} term lengths...")
         if shared_ylim and not relative:

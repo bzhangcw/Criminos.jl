@@ -45,17 +45,18 @@ class SimulationSetup:
         self.dbg = int(os.environ.get("DBG", "0"))
 
         # Default values
-        self.p_freeze = 0
+        self.p_freeze = 2
         # @note: previously we use 400 x 40000 is quite stable.
-        self.p_length = 200
+        self.p_length = 100
         self.T_max = 40000
         self.treatment_capacity = 80
-        self.treatment_effect = 0.5
+        self.treatment_effect = lambda _: 0.5
         """@note: try not change to 1
         1: vital for memory need about 5G RAM
         2: 1 will be very slow to converge (need many epochs))
         """
         self.beta_arrival = 5
+        self.beta_initial = 5
         self.communities = {1}
         self.rel_off_probation = 2000
         self.fit_kwargs = {
@@ -126,7 +127,22 @@ class SimulationSetup:
         print("-" * 60)
         print("Treatment Settings:")
         print(f"  capacity:          {self.treatment_capacity} per episode")
-        print(f"  effect:            {self.treatment_effect}")
+        effect_text = getattr(self, "treatment_help_text", str(self.treatment_effect))
+        # Handle multi-line docstrings
+        effect_lines = effect_text.strip().split("\n")
+        print(f"  effect:            {effect_lines[0].strip()}")
+        for line in effect_lines[1:]:
+            print(f"                     {line.strip()}")
+        dosage_text = getattr(
+            self,
+            "treatment_dosage_help_text",
+            str(getattr(self, "treatment_dosage", "default")),
+        )
+        # Handle multi-line docstrings
+        dosage_lines = dosage_text.strip().split("\n")
+        print(f"  dosage:            {dosage_lines[0].strip()}")
+        for line in dosage_lines[1:]:
+            print(f"                     {line.strip()}")
         print(f"  max_returns:       {self.max_returns}")
         print(f"  max_offenses:      {self.max_offenses}")
         print(f"  return_can_treat:  {self.bool_return_can_be_treated}")
@@ -142,6 +158,7 @@ class SimulationSetup:
         print("-" * 60)
         print("Population & Arrivals:")
         print(f"  beta_arrival:      {self.beta_arrival} (arrival rate)")
+        print(f"  beta_initial:      {self.beta_initial} (initial population size)")
         print(f"  communities:       {self.communities}")
         print(f"  initial pop:       {len(self.dfpop0)} individuals")
         print(f"  available pool:    {len(self.dfi)} individuals")
@@ -227,9 +244,8 @@ class SimulationSetup:
         )
 
         # Sample initial population
-        np.random.seed(123)
         self.assign_weights()
-        self.dfpop0 = self.dfi.sample(30)
+        self.dfpop0 = self.dfi.sample(self.beta_initial)
 
     def assign_weights(self):
         """Assign weights to the individuals so I sample according to the weights."""
@@ -352,6 +368,15 @@ def get_tests(settings=None):
                 exclude=lambda row: row["age_dist"] >= 3,
             ),
         ),
+        "high-risk-cutoff": (
+            smt.treatment_rule_priority,
+            dict(
+                key="score",
+                capacity=settings.treatment_capacity,
+                ascending=False,
+                exclude=lambda row: row["score"] >= -1.414,
+            ),
+        ),
         "age-tolerance": (
             smt.treatment_rule_priority,
             dict(
@@ -376,22 +401,22 @@ def get_tests(settings=None):
         # ------------------------------------------------------------
         # fluid/probabilistic policies
         # ------------------------------------------------------------
-        "fluid-low-age-low-prev": (
-            smt.treatment_rule_priority_fluid,
-            dict(
-                key="_new_prior",
-                capacity=settings.treatment_capacity,
-                prob_vector=pr_lowj_lowa,
-            ),
-        ),
-        "fluid-low-age-threshold-offenses": (
-            smt.treatment_rule_priority_fluid,
-            dict(
-                key="_new_prior",
-                capacity=settings.treatment_capacity,
-                prob_vector=pr_threshj_lowa,
-            ),
-        ),
+        # "fluid-low-age-low-prev": (
+        #     smt.treatment_rule_priority_fluid,
+        #     dict(
+        #         key="_new_prior",
+        #         capacity=settings.treatment_capacity,
+        #         prob_vector=pr_lowj_lowa,
+        #     ),
+        # ),
+        # "fluid-low-age-threshold-offenses": (
+        #     smt.treatment_rule_priority_fluid,
+        #     dict(
+        #         key="_new_prior",
+        #         capacity=settings.treatment_capacity,
+        #         prob_vector=pr_threshj_lowa,
+        #     ),
+        # ),
     }
 
 

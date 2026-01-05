@@ -16,9 +16,11 @@ echo "Generating commands for $repeat repeats starting from repeation number $st
 # policies=(null high-risk low-risk age-first age-first-high-risk)
 policies=(null high-risk low-risk age-first)
 # policies=(age-first-high-risk)
-capacities=(50 100 200 300 400 500)
+capacities=(50 100 200 300 400)
 # effects=(0.3 0.4 0.7 0.8)
-effects=(0.6 0.9)
+# effects=(0.6 0.9)
+# effects=(0.731)
+effects=(type-2)
 
 
 # Generate commands to cmd.sh
@@ -44,8 +46,8 @@ for ((k=$start; k<$start+$repeat; k++)); do
     --beta_arrival 5 \
     --max_returns 30 \
     --max_offenses 35 \
-    --T_max 60000 --p_length 100 \
-    --rel_off_probation 1500 \
+    --T_max 42000 --p_length 100 \
+    --rel_off_probation 1000 \
     --treatment_capacity $capacity \
     --treatment_effect $effect \
     $policy 1 $k $outd &> $outd/logs/${policy}_${k}_${capacity}_${effect}.log " >> $output/cmd.sh

@@ -15,15 +15,23 @@ from simulation_summary import get_policy_color, get_policy_linestyle
 
 
 def compute_equilibrium_value(
-    policy_metrics: dict, metric_key: str, num_period_window: int
+    policy_metrics: dict,
+    metric_key: str,
+    num_period_window: int,
+    use_first: bool = False,
+    start_from: int = 0,
 ) -> np.ndarray:
     """
-    Compute equilibrium value by summing over last num_period_window periods.
+    Compute value by summing over a window of periods.
 
     Args:
         policy_metrics: Dict from read_metrics_from_h5 with 2D arrays
         metric_key: Name of metric to compute (e.g., 'total_offenses')
         num_period_window: Number of periods to sum over
+        use_first: If False (default), sum over last num_period_window periods (equilibrium).
+                   If True, sum over first num_period_window periods starting from start_from.
+        start_from: Starting period index when use_first=True (default: 0).
+                    Ignored when use_first=False.
 
     Returns:
         Array of values, one per repetition (shape: n_reps,)
@@ -38,9 +46,13 @@ def compute_equilibrium_value(
             f"Expected 2D array for metric '{metric_key}', got {type(data)} with shape {getattr(data, 'shape', 'N/A')}"
         )
 
-    # Sum over last num_period_window periods for each repetition
+    # Sum over specified window for each repetition
     # data shape: (n_reps, n_episodes)
-    vals = np.sum(data[:, -num_period_window:], axis=1)
+    if use_first:
+        end_idx = start_from + num_period_window
+        vals = np.sum(data[:, start_from:end_idx], axis=1)
+    else:
+        vals = np.sum(data[:, -num_period_window:], axis=1)
 
     return vals
 

@@ -22,7 +22,9 @@ metrics = [
 # policies = ["null", "high-risk", "low-risk", "age-first", "age-first-high-risk"]
 # policies = ["null", "high-risk", "low-risk", "age-first-high-risk"]
 policies = ["null", "high-risk", "low-risk", "age-first"]
-summary_wd = 20  # Window size for computing equilibrium (last N periods)
+summary_wd_last = 20  # Window size for computing equilibrium (last N periods)
+summary_wd_first = 70  # Window size for computing first N periods
+summary_wd_start = 20
 
 print("=" * 60)
 print("Running Prison Scale Factor Sensitivity Analysis")
@@ -30,50 +32,79 @@ print("=" * 60)
 print(f"Results directory: {results_dir}")
 print(f"Metrics: {metrics}")
 print(f"Policies: {policies}")
-print(f"Summary window: {summary_wd} periods")
+print(f"Summary window (last/equilibrium): {summary_wd_last} periods")
+print(f"Summary window (first): {summary_wd_first} periods")
 print()
 
-# Run analysis
-dfs = analyze_sensitivity(results_dir, metrics, policies, summary_wd)
+# Create base output directory inside results_dir
+base_output_dir = os.path.join(results_dir, "sensitivity_analysis")
+os.makedirs(base_output_dir, exist_ok=True)
+
+
+def run_analysis_and_plot(summary_wd: int, use_first: bool, suffix: str):
+    """Run analysis and generate plots for a given window configuration."""
+    print("\n" + "=" * 60)
+    print(f"Running Analysis: {suffix} (window={summary_wd}, use_first={use_first})")
+    print("=" * 60)
+
+    # Run analysis
+    dfs = analyze_sensitivity(
+        results_dir,
+        metrics,
+        policies,
+        summary_wd,
+        use_first=use_first,
+        start_from=summary_wd_start,
+    )
+
+    print("\n" + "-" * 40)
+    print("Saving Results")
+    print("-" * 40)
+
+    # Create output subdirectory
+    output_dir = os.path.join(base_output_dir, suffix)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Save each metric to a separate CSV file
+    for metric, df in dfs.items():
+        filename = os.path.join(output_dir, f"sensitivity_{metric}.csv")
+        df.to_csv(filename)
+        print(f"Saved {filename} (shape: {df.shape})")
+
+    print("\n" + "-" * 40)
+    print("Generating Plots")
+    print("-" * 40)
+
+    # Generate plots for all metrics (absolute)
+    plot_all_term_lengths(
+        dfs=dfs,
+        output_dir=output_dir,
+        policies=policies,
+        show_std=True,
+        scale=0.12,
+        relative=False,
+    )
+    # Generate plots for all metrics (relative to null)
+    plot_all_term_lengths(
+        dfs=dfs,
+        output_dir=output_dir,
+        policies=policies,
+        show_std=True,
+        scale=0.12,
+        relative=True,
+        relative_policy="null",
+    )
+
+    print(f"\nResults saved to {output_dir}/")
+    return dfs
+
+
+# Run for equilibrium (last N periods)
+dfs_last = run_analysis_and_plot(summary_wd_last, use_first=False, suffix="equilibrium")
+
+# Run for first N periods
+dfs_first = run_analysis_and_plot(summary_wd_first, use_first=True, suffix="first")
 
 print("\n" + "=" * 60)
-print("Analysis Complete - Saving Results")
-print("=" * 60)
-
-# Create output directory inside results_dir
-output_dir = os.path.join(results_dir, "sensitivity_analysis")
-os.makedirs(output_dir, exist_ok=True)
-
-# Save each metric to a separate CSV file
-for metric, df in dfs.items():
-    filename = os.path.join(output_dir, f"sensitivity_{metric}.csv")
-    df.to_csv(filename)
-    print(f"Saved {filename} (shape: {df.shape})")
-
-print("\n" + "=" * 60)
-print("Generating Plots")
-print("=" * 60)
-
-# Generate plots for all metrics
-plot_all_term_lengths(
-    dfs=dfs,
-    output_dir=output_dir,
-    policies=policies,
-    show_std=True,
-    scale=0.12,
-    relative=True,  # Plot differences from baseline
-    relative_policy="null",  # Use "null" policy as baseline (default)
-)
-plot_all_term_lengths(
-    dfs=dfs,
-    output_dir=output_dir,
-    policies=policies,
-    show_std=True,
-    scale=0.12,
-    relative=False,
-)
-
-
-print("\n" + "=" * 60)
-print(f"All results saved to {output_dir}/")
+print(f"All results saved to {base_output_dir}/")
 print("=" * 60)

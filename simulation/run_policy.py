@@ -30,6 +30,7 @@ import simulation, sirakaya
 # Import what we need from simulation_setup
 from simulation_setup import SimulationSetup, get_tests, default_settings
 from simulation_summary import *
+import simulation_treatment as smt
 
 
 def create_parser():
@@ -96,6 +97,12 @@ def create_parser():
         default=default_settings.beta_arrival,
         help="Arrival rate parameter",
     )
+    sim_group.add_argument(
+        "--beta_initial",
+        type=int,
+        default=default_settings.beta_initial,
+        help="Initial population size",
+    )
 
     # Treatment parameters
     treat_group = parser.add_argument_group("Treatment Parameters")
@@ -107,9 +114,15 @@ def create_parser():
     )
     treat_group.add_argument(
         "--treatment_effect",
-        type=float,
-        default=default_settings.treatment_effect,
-        help="Treatment effect multiplier (0-1)",
+        type=str,
+        default="0.5",
+        help="Treatment effect: a number (0-1) for homogeneous effect, or 'type-1' for heterogeneous effect",
+    )
+    treat_group.add_argument(
+        "--treatment_dosage",
+        type=str,
+        default="default",
+        help="Treatment dosage: 'default' (1.0 for all) or 'type-1' for heterogeneous",
     )
     treat_group.add_argument(
         "--max_returns",
@@ -165,6 +178,13 @@ def create_parser():
         default=2,
         help="Verbosity level (0=silent, 1=progress, 2=detailed)",
     )
+    other_group.add_argument(
+        "--option_weights",
+        type=str,
+        choices=["younger"],
+        default=None,
+        help="Option for assigning weights to population (e.g., 'younger' for age-based weights)",
+    )
 
     return parser
 
@@ -208,6 +228,7 @@ def run_sim(
         treatment_effect=settings.treatment_effect,
         func_treatment=func_treatment,
         func_treatment_kwargs=func_treatment_kwargs,
+        func_dosage=settings.treatment_dosage,
         str_qualifying_for_treatment=settings.str_qualifying_for_treatment,
         str_current_enroll=settings.str_current_enroll,
         bool_return_can_be_treated=settings.bool_return_can_be_treated,
@@ -267,6 +288,11 @@ def run_name(name, repeat=3, start=0, output_dir="results", settings=None):
     return repeat
 
 
+def assign_weights_younger_population(settings):
+    """Sample a younger population from the initial population."""
+    settings.dfi["weight"] = settings.dfi["age"].apply(lambda x: 100 - x)
+
+
 if __name__ == "__main__":
     parser = create_parser()
     args = parser.parse_args()
@@ -281,14 +307,44 @@ if __name__ == "__main__":
     settings.p_freeze = args.p_freeze
     settings.rel_off_probation = args.rel_off_probation
     settings.beta_arrival = args.beta_arrival
-    settings.treatment_capacity = args.treatment_capacity
-    settings.treatment_effect = args.treatment_effect
-    settings.max_returns = args.max_returns
-    settings.max_offenses = args.max_offenses
+    settings.beta_initial = args.beta_initial
     settings.bool_return_can_be_treated = args.bool_return_can_be_treated
     settings.bool_has_incarceration = args.bool_has_incarceration
-    settings.prison_rate_scaler = args.prison_rate_scaler
     settings.length_scaler = args.length_scaler
+    settings.prison_rate_scaler = args.prison_rate_scaler
+    settings.max_offenses = args.max_offenses
+    settings.max_returns = args.max_returns
+    settings.treatment_capacity = args.treatment_capacity
+    settings.treatment_dosage = args.treatment_dosage
+
+    # Convert treatment_effect arg to a callable
+    if args.treatment_effect == "type-1":
+        settings.treatment_effect = smt.treatment_effect_type_1
+        settings.treatment_help_text = smt.treatment_effect_type_1.__doc__
+    elif args.treatment_effect == "type-2":
+        settings.treatment_effect = smt.treatment_effect_type_2
+        settings.treatment_help_text = smt.treatment_effect_type_2.__doc__
+    else:
+        # Assume it's a number for homogeneous effect
+        effect_value = float(args.treatment_effect)
+        if not (0 < effect_value <= 1):
+            raise ValueError(f"treatment_effect must be in (0, 1], got {effect_value}")
+        settings.treatment_effect = lambda row, e=effect_value: np.log(e)
+        settings.treatment_help_text = f"Homogeneous treatment effect: input {effect_value}, translate to score as +log({effect_value}) = {np.log(effect_value)}"
+
+    # Convert treatment_effect arg to a callable
+    if args.treatment_dosage == "type-1":
+        settings.treatment_dosage = smt.treatment_dosage_type_1
+        settings.treatment_dosage_help_text = smt.treatment_dosage_type_1.__doc__
+    else:
+        settings.treatment_dosage = smt.treatment_dosage_default
+        settings.treatment_dosage_help_text = smt.treatment_dosage_default.__doc__
+
+    # Resample initial population with updated beta_initial
+    settings.dfpop0 = settings.dfi.sample(settings.beta_initial)
+
+    if args.option_weights == "younger":
+        assign_weights_younger_population(settings)
 
     # Print summary with final parameters
     settings._print_summary()

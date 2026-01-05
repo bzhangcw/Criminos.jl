@@ -22,7 +22,7 @@ from simulation_sensanaly import compute_equilibrium_value, plot_sensitivity_tre
 
 def parse_directory_structure(
     results_dir: str,
-) -> Tuple[List[int], List[float], List[str]]:
+) -> Tuple[List[int], List, List[str]]:
     """
     Scan results directory to find all (C, e) combinations and available policies.
 
@@ -42,8 +42,9 @@ def parse_directory_structure(
     effects = set()
     policies = set()
 
-    # Pattern to match directory names like "c-50-e-0.1"
-    pattern = re.compile(r"c-(\d+)-e-([\d.]+)")
+    # Pattern to match directory names like "c-50-e-0.1" or "c-50-e-type-1"
+    # Effect can be numeric (e.g., 0.1, 0.731) or string (e.g., type-1)
+    pattern = re.compile(r"c-(\d+)-e-(.+)")
 
     for dirname in os.listdir(results_dir):
         dirpath = os.path.join(results_dir, dirname)
@@ -53,7 +54,12 @@ def parse_directory_structure(
         match = pattern.match(dirname)
         if match:
             capacity = int(match.group(1))
-            effect = float(match.group(2))
+            effect_str = match.group(2)
+            # Try to parse as float, otherwise keep as string
+            try:
+                effect = float(effect_str)
+            except ValueError:
+                effect = effect_str
             capacities.add(capacity)
             effects.add(effect)
 
@@ -64,11 +70,15 @@ def parse_directory_structure(
                     policies.add(policy_name)
 
     # Keep 'null' in policies list to show baseline
-    return (sorted(list(capacities)), sorted(list(effects)), sorted(list(policies)))
+    # Sort effects: numeric first (sorted), then strings (sorted)
+    numeric_effects = sorted([e for e in effects if isinstance(e, (int, float))])
+    string_effects = sorted([e for e in effects if isinstance(e, str)])
+    sorted_effects = numeric_effects + string_effects
+    return (sorted(list(capacities)), sorted_effects, sorted(list(policies)))
 
 
 def load_policy_metrics(
-    results_dir: str, capacity: int, effect: float, policy_name: str
+    results_dir: str, capacity: int, effect, policy_name: str
 ) -> Tuple[Dict, Dict]:
     """
     Load metrics for a specific policy at given capacity and effect.
@@ -132,7 +142,12 @@ def compute_relative_performance(
 
 
 def analyze_sensitivity(
-    results_dir: str, metrics: List[str], policies: List[str], summary_wd: int
+    results_dir: str,
+    metrics: List[str],
+    policies: List[str],
+    summary_wd: int,
+    use_first: bool = False,
+    start_from: int = 0,
 ) -> Dict[str, pd.DataFrame]:
     """
     Analyze sensitivity across capacity and effect parameters.
@@ -142,6 +157,9 @@ def analyze_sensitivity(
         metrics: List of metric names (e.g., ['total_offenses'])
         policies: List of policy names (e.g., ['high-risk', 'low-risk', 'null'])
         summary_wd: Window size for equilibrium computation (num_period_window)
+        use_first: If False (default), use last summary_wd periods (equilibrium).
+                   If True, use first summary_wd periods starting from start_from.
+        start_from: Starting period index when use_first=True (default: 0).
 
     Returns:
         dict: {metric_name: DataFrame} where each DataFrame has:
@@ -191,7 +209,11 @@ def analyze_sensitivity(
                     # Compute enrollment statistics (absolute values)
                     # Divide by summary_wd to get average per period
                     enrollment_vals = compute_equilibrium_value(
-                        policy_metrics, "total_enrollment", summary_wd
+                        policy_metrics,
+                        "total_enrollment",
+                        summary_wd,
+                        use_first,
+                        start_from,
                     )
                     enrollment_mean = float(np.mean(enrollment_vals)) / summary_wd
                     enrollment_std = float(np.std(enrollment_vals)) / summary_wd
@@ -199,9 +221,13 @@ def analyze_sensitivity(
                     # Compute statistics for each metric
                     for metric in metrics:
                         try:
-                            # Compute equilibrium values (sum over summary_wd periods)
+                            # Compute values (sum over summary_wd periods)
                             policy_vals = compute_equilibrium_value(
-                                policy_metrics, metric, summary_wd
+                                policy_metrics,
+                                metric,
+                                summary_wd,
+                                use_first,
+                                start_from,
                             )
 
                             # Compute absolute statistics (averaged per period)
@@ -279,7 +305,7 @@ def compute_metric_ylim(df: pd.DataFrame, show_std: bool = True) -> Tuple[float,
 def plot_capacity_trends(
     df: pd.DataFrame,
     metric_name: str,
-    effect: float,
+    effect,
     output_path: str,
     policies: Optional[List[str]] = None,
     ylabel: Optional[str] = None,
@@ -348,8 +374,13 @@ def plot_all_effects(
     os.makedirs(output_dir, exist_ok=True)
 
     for metric_name, df in dfs.items():
-        # Get all effect values
-        effects = sorted(df.index.get_level_values("effect").unique())
+        # Get all effect values (sort numeric first, then strings)
+        all_effects = df.index.get_level_values("effect").unique()
+        numeric_effects = sorted(
+            [e for e in all_effects if isinstance(e, (int, float))]
+        )
+        string_effects = sorted([e for e in all_effects if isinstance(e, str)])
+        effects = numeric_effects + string_effects
 
         # Compute consistent y-limits for this metric if requested (only for absolute values)
         ylim = (
@@ -364,7 +395,12 @@ def plot_all_effects(
 
         for effect in effects:
             # Create base filename (without extension)
-            filename = f"{metric_name}_effect_{effect:.1f}"
+            # Handle both numeric and string effect values
+            if isinstance(effect, float):
+                effect_str = f"{effect}"
+            else:
+                effect_str = str(effect)
+            filename = f"{metric_name}_effect_{effect_str}"
             if relative:
                 filename += f"_rel_{relative_policy}"
             output_path = os.path.join(output_dir, filename)

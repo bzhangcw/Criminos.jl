@@ -39,6 +39,7 @@ POLICY_COLORS = {
     # ------------------------------------------------------------
     "high-risk": "#d62728",  # red
     "low-risk": "#546de5",  # green
+    "high-risk-cutoff": "#e377c2",  # pink
     "high-risk-only-young": "#e377c2",  # pink
     "high-risk-lean-young": "#2ca02c",  # green
     "age-tolerance": "#17becf",  # cyan
@@ -411,6 +412,8 @@ def plot_metric(
     start=20,
     output_path=None,
     num_period_window=None,
+    relative=False,
+    relative_policy="null",
 ):
     """
     Plot a single metric for all simulations with confidence intervals.
@@ -427,9 +430,47 @@ def plot_metric(
         start: starting episode index (skip first N episodes)
         output_path: path to save PDF (default: /tmp/{metric_key}-trend.pdf)
         num_period_window: window size for rolling sum (if None, uses cumulative mean)
+        relative: if True, plot values relative to relative_policy (default: False)
+        relative_policy: policy name to use as baseline for relative plots (default: "null")
     """
     fig = go.Figure()
     import matplotlib.colors as mcolors
+
+    # Compute baseline values if relative mode is enabled
+    baseline_mean = None
+    if relative:
+        if relative_policy not in metrics_dict:
+            print(
+                f"Warning: relative_policy '{relative_policy}' not found in metrics_dict. "
+                "Plotting absolute values instead."
+            )
+            relative = False
+        elif metric_key not in metrics_dict[relative_policy]:
+            print(
+                f"Warning: metric_key '{metric_key}' not found for relative_policy '{relative_policy}'. "
+                "Plotting absolute values instead."
+            )
+            relative = False
+        else:
+            baseline_data = metrics_dict[relative_policy][metric_key]
+            if isinstance(baseline_data, dict) and "mean" in baseline_data:
+                # Compute rolling sum or cumulative mean for baseline
+                if num_period_window is not None:
+                    cumsum = np.cumsum(baseline_data["mean"])
+                    baseline_mean = np.array(
+                        [
+                            (
+                                cumsum[i]
+                                if i < num_period_window
+                                else cumsum[i] - cumsum[i - num_period_window]
+                            )
+                            for i in range(len(baseline_data["mean"]))
+                        ]
+                    )
+                else:
+                    baseline_mean = np.cumsum(baseline_data["mean"]) / np.arange(
+                        1, len(baseline_data["mean"]) + 1
+                    )
 
     for i, (k, metrics) in enumerate(metrics_dict.items()):
         if metric_key not in metrics:
@@ -474,9 +515,13 @@ def plot_metric(
             # For std, use cumulative std approximation
             raw_std = data["std"] / np.sqrt(np.arange(1, len(data["std"]) + 1))
 
+        # Subtract baseline if relative mode is enabled
+        if relative and baseline_mean is not None:
+            raw_mean = raw_mean - baseline_mean
+
         mean_vals = raw_mean[start:]
         std_vals = raw_std[start:]
-        min_vals = np.maximum(mean_vals - 2 * std_vals, 0)
+        min_vals = mean_vals - 2 * std_vals
         max_vals = mean_vals + 2 * std_vals
 
         # Episodes start from (start)

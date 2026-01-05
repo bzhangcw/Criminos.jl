@@ -251,6 +251,7 @@ class Simulator(object):
     INITIALIZED_COLUMNS = [
         "acc_survival",  # accumulated survival time(s)
         "bool_left",  # whether the individual has left (end of probation term)
+        "bool_lost",  # whether we lost control
         "type_left",  # the reason for leaving (end of probation term / too many arrests)
         "observed",  # whether the individual has been observed (ever arrested)
         "treat_start",  # the time when the treatment started
@@ -373,9 +374,10 @@ class Simulator(object):
         p_freeze=4,
         rel_off_probation=500,
         # ----------------------------------------------------------------------
-        treatment_effect=0.5,
+        treatment_effect=None,
         func_treatment=None,
         func_treatment_kwargs={},
+        func_dosage=simt.treatment_dosage_default,
         # ----------------------------------------------------------------------
         str_qualifying_for_treatment="",
         str_current_enroll="",
@@ -470,6 +472,7 @@ class Simulator(object):
         dfi["score_stage"] = 1.0  # 1.0 for probation stage
         dfi["state_lst"] = dfi["state"].apply(lambda x: StateVal(x.value))
         dfi["bool_can_be_treated"] = 1
+        dfi["dosage"] = 1.0
 
         # statistics
         self.num_y = num_y = defaultdict(int)
@@ -640,6 +643,7 @@ class Simulator(object):
                 dfi.at[idx, "score_state"] = self.state_defs.get_score(row_data)
                 dfi.at[idx, "score_comm"] = dfc_dict.get(row_data["code_county"])
                 dfi.at[idx, "score"] = self.produce_score(idx, dfi)
+                dfi.at[idx, "dosage"] = func_dosage(idx, dfi)
 
                 # ------------------------------------------------------------
                 # produce the end-probation event
@@ -665,7 +669,8 @@ class Simulator(object):
 
                 # generate next arrival individual
                 if info == EventType.EVENT_ARR:
-                    _new_row = dfpop.sample(1).iloc[0]
+                    _new_row = dfpop.sample(1, weights="weight").iloc[0]
+
                     _arrival = self.func_arrival(
                         _new_row,
                         t,
@@ -864,6 +869,10 @@ class Simulator(object):
                 # update state and state score.
                 for idx in dfi[_idx_not_before].index:
                     self.state_defs.update_state(dfi, idx, t)
+                    dfi.at[idx, "dosage"] = func_dosage(idx, dfi)
+
+                # we have a chance to lose track of the individuals
+                # TODO: to-be added.
 
                 # update the community score
                 # to individuals who did not leave yet
@@ -872,6 +881,7 @@ class Simulator(object):
                 dfi.loc[_idx_staying, "score_comm"] = dfi.loc[
                     _idx_staying, "code_county"
                 ].map(dfc_dict)
+                # dfi.loc[_idx_staying, "bool_lost"] =
 
                 # produce the score
                 dfi.loc[_idx_staying, "score"] = self.produce_score(_idx_staying, dfi)
@@ -897,8 +907,11 @@ class Simulator(object):
                 # If treatment_effect = 0.5: score + log(0.5) = score - 0.693
                 # → Lower score → Higher survival → Lower offense ✓
                 dfi["bool_treat_made"] = 1
+                _global_median_score = dfi.loc[idx_selected, "score_state"].median()
                 for idx in idx_selected:
-                    _admit_event = admit_treatment(dfi, idx, t, treatment_effect)
+                    _admit_event = admit_treatment(
+                        dfi, idx, t, treatment_effect, med=_global_median_score
+                    )
                     # and we have to update the state again and score for these people
                     self.state_defs.update_state(dfi, idx, t)
                     dfi.loc[idx, "score"] = self.produce_score(idx, dfi)
@@ -924,43 +937,6 @@ class Simulator(object):
                         .assign(snap=p)
                         .reset_index()
                     )
-                # if self.bool_keep_full_trajectory:
-                #     # keep trajectory - store individuals still in system OR leaving this period
-                #     # Need to include:
-                #     # 1. Active individuals: (ep_arrival <= _boundary) & (ep_leaving > _boundary)
-                #     # 2. People leaving NOW: (ep_leaving == _boundary) - needed for departure counts
-                #     # Combined: (ep_arrival <= _boundary) & (ep_leaving >= _boundary)
-                #     _boundary = p + p_freeze
-                #     _active_mask = (dfi["ep_arrival"] <= _boundary) & (
-                #         dfi["ep_leaving"] >= _boundary
-                #     )
-                #     dfc_sorted = dfc.assign(snap=p).reset_index()
-                #     # Only store active individuals (not yet left)
-                #     dfi_active = dfi[_active_mask]
-                #     dfi_sorted = dfi_active.assign(snap=p).reset_index()
-                #     t_dfc.append(dfc_sorted)
-                #     t_dfi.append(dfi_sorted.reindex(sorted(dfi_sorted.columns), axis=1))
-                #     # For treatment trajectory, only include selected individuals who are active
-                #     if len(idx_selected) > 0:
-                #         _selected_active = [
-                #             i for i in idx_selected if i in dfi_active.index
-                #         ]
-                #         if len(_selected_active) > 0:
-                #             t_dftau.append(
-                #                 dfi_active.loc[_selected_active, sorted(dfi.columns)]
-                #                 .assign(snap=p)
-                #                 .reset_index()
-                #             )
-                #         else:
-                #             # No selected individuals are active
-                #             t_dftau.append(
-                #                 pd.DataFrame(columns=list(dfi.columns) + ["snap"])
-                #             )
-                #     else:
-                #         # No individuals selected for treatment
-                #         t_dftau.append(
-                #             pd.DataFrame(columns=list(dfi.columns) + ["snap"])
-                #         )
 
                 p = _episode
 
@@ -1048,10 +1024,12 @@ class Simulator(object):
 # ------------------------------------------------------------------------------
 # some default utilities
 # ------------------------------------------------------------------------------
-def admit_treatment(dfi, idx, t, treatment_effect, **kwargs):
+def admit_treatment(dfi, idx, t, treatment_effect, med, **kwargs):
     dfi.loc[idx, "bool_treat"] = 1
     dfi.loc[idx, "has_been_treated"] = 1
-    dfi.loc[idx, "score_treatment"] = np.log(treatment_effect)
+    # treatment_effect is a callable taking the row as parameter
+    effect = treatment_effect(dfi.loc[idx], med=med)
+    dfi.loc[idx, "score_treatment"] = effect
     # Apply treatment to selected
     dfi.loc[idx, "treat_start"] = t
     return Event(t, 0.0, idx, EventType.EVENT_ADMIT, idx_ref=-1)
