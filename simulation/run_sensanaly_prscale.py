@@ -23,8 +23,8 @@ metrics = [
 # policies = ["null", "high-risk", "low-risk", "age-first-high-risk"]
 policies = ["null", "high-risk", "low-risk", "age-first"]
 summary_wd_last = 20  # Window size for computing equilibrium (last N periods)
-summary_wd_first = 70  # Window size for computing first N periods
-summary_wd_start = 20
+summary_wd_first = 40  # Window size for computing first N periods
+summary_wd_start = 80
 
 print("=" * 60)
 print("Running Prison Scale Factor Sensitivity Analysis")

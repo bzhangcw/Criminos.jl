@@ -324,12 +324,13 @@ if __name__ == "__main__":
     elif args.treatment_effect == "type-2":
         settings.treatment_effect = smt.treatment_effect_type_2
         settings.treatment_help_text = smt.treatment_effect_type_2.__doc__
+    elif args.treatment_effect == "type-3":
+        settings.treatment_effect = smt.treatment_effect_type_3
+        settings.treatment_help_text = smt.treatment_effect_type_3.__doc__
     else:
         # Assume it's a number for homogeneous effect
         effect_value = float(args.treatment_effect)
-        if not (0 < effect_value <= 1):
-            raise ValueError(f"treatment_effect must be in (0, 1], got {effect_value}")
-        settings.treatment_effect = lambda row, e=effect_value: np.log(e)
+        settings.treatment_effect = lambda row, e=effect_value, **kwargs: np.log(e)
         settings.treatment_help_text = f"Homogeneous treatment effect: input {effect_value}, translate to score as +log({effect_value}) = {np.log(effect_value)}"
 
     # Convert treatment_effect arg to a callable

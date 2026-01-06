@@ -173,9 +173,27 @@ def treatment_effect_type_1(row, med=-0.3604):
     return -0.3425 * min(2, np.exp(delta))
 
 
-def treatment_effect_type_2(row, med=-0.3604):
+def treatment_effect_type_2(row, med=-0.3604, mt_high=0.1, mt_low=6.0):
     """
     Heterogeneous treatment effect based on individual characteristics.
+      "lower score, less treatment effect."
+    Args:
+        row: pandas Series representing an individual's data
+
+    Returns:
+        float: treatment effect value (0-1)
+    """
+    # TODO: implement type-1 heterogeneous treatment effect logic
+    delta = row["score_state"] + 0.3604
+    highr = delta >= 0
+    mt = mt_high if highr else mt_low
+    return -0.3425 * mt
+
+
+def treatment_effect_type_3(row, med=-0.3604, mt_high=0.1, mt_low=6.0):
+    """
+    Heterogeneous treatment effect based on individual characteristics.
+     "more offenses, less treatment effect."
 
     Args:
         row: pandas Series representing an individual's data
@@ -186,7 +204,7 @@ def treatment_effect_type_2(row, med=-0.3604):
     # TODO: implement type-1 heterogeneous treatment effect logic
     delta = row["offenses"] - 3
     highr = delta >= 0
-    mt = 0.1 if highr else 3.0
+    mt = mt_high if highr else mt_low
     return -0.3425 * mt
 
 

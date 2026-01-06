@@ -193,22 +193,35 @@ def read_metrics_from_h5(name, output_dir="results"):
         all_rep_metrics.append(rep_metrics)
 
     # Stack into matrices and compute aggregates
+    if not all_rep_metrics:
+        raise ValueError(
+            f"No metrics.h5 files found in any repetition directory under {policy_dir}"
+        )
     metric_keys = all_rep_metrics[0].keys()
     policy_metrics = {}
     policy_agg = {}
 
-    # Treatment fields are flattened and vary in length - store as list, no aggregates
-    treatment_keys = {
-        "treatment_index_flat",
+    # Per-state fields are flattened and vary in length - store as list, no aggregates
+    # These share the same index structure (state_index_flat / state_lengths)
+    per_state_keys = {
+        # Shared indices
+        "state_index_flat",
+        "state_lengths",
+        # Treatment data
         "treatment_tau_flat",
         "treatment_tau_rel_flat",
+        # Population data
+        "population_x0_flat",
+        "population_yin_flat",
+        # Legacy names (for backward compatibility)
+        "treatment_index_flat",
         "treatment_lengths",
     }
 
     for metric_key in metric_keys:
         arrays = [m[metric_key] for m in all_rep_metrics]
 
-        if metric_key in treatment_keys:
+        if metric_key in per_state_keys:
             # Store as list of arrays (no stacking/aggregation)
             policy_metrics[metric_key] = arrays
             # No aggregation for treatment fields
@@ -403,6 +416,43 @@ def add_to_metrics(all_metrics, agg_metrics, k, simulators, p_freeze, windowsize
 # ------------------------------------------------------------
 # plot metrics from all_metrics, which is a dict of results
 # ------------------------------------------------------------
+def _compute_rolling_sum_per_rep(data_2d, num_period_window):
+    """
+    Compute rolling sum over window for each rep.
+
+    Args:
+        data_2d: 2D array (n_reps, n_episodes)
+        num_period_window: window size for rolling sum
+
+    Returns:
+        2D array (n_reps, n_episodes) with rolling sums
+    """
+    n_reps, n_episodes = data_2d.shape
+    cumsum = np.cumsum(data_2d, axis=1)
+    result = np.zeros_like(data_2d)
+    for i in range(n_episodes):
+        if i < num_period_window:
+            result[:, i] = cumsum[:, i]
+        else:
+            result[:, i] = cumsum[:, i] - cumsum[:, i - num_period_window]
+    return result
+
+
+def _compute_cumulative_mean_per_rep(data_2d):
+    """
+    Compute cumulative mean for each rep.
+
+    Args:
+        data_2d: 2D array (n_reps, n_episodes)
+
+    Returns:
+        2D array (n_reps, n_episodes) with cumulative means
+    """
+    cumsum = np.cumsum(data_2d, axis=1)
+    divisor = np.arange(1, data_2d.shape[1] + 1)
+    return cumsum / divisor
+
+
 def plot_metric(
     metrics_dict,
     metric_key,
@@ -417,16 +467,17 @@ def plot_metric(
 ):
     """
     Plot a single metric for all simulations with confidence intervals.
-    Computes rolling sum over last num_period_window periods: sum_{t=T-W+1}^{T} x_t
-    If num_period_window is None, computes cumulative mean: (1/T) * sum_{t=1}^{T} x_t
+    Uses raw per-rep data for consistent statistics with equilibrium computation.
+    Computes rolling sum over last num_period_window periods per rep, then aggregates.
+    If num_period_window is None, computes cumulative mean per rep, then aggregates.
 
     Args:
-        metrics_dict: agg_metrics from collect_metrics() (dict with 'mean' and 'std')
+        metrics_dict: all_metrics from collect_metrics() (dict with 2D arrays per metric)
         metric_key: e.g. 'total_population', 'total_offenses', 'total_enrollment',
                     'total_incarcerated', 'total_returns', 'offense_rate', etc.
         ylabel: optional y-axis label (defaults to metric_key)
         title: optional plot title
-        show_ci: whether to show confidence interval (min/max band)
+        show_ci: whether to show confidence interval (mean ± 2*std band)
         start: starting episode index (skip first N episodes)
         output_path: path to save PDF (default: /tmp/{metric_key}-trend.pdf)
         num_period_window: window size for rolling sum (if None, uses cumulative mean)
@@ -436,8 +487,8 @@ def plot_metric(
     fig = go.Figure()
     import matplotlib.colors as mcolors
 
-    # Compute baseline values if relative mode is enabled
-    baseline_mean = None
+    # Compute baseline values if relative mode is enabled (per-rep)
+    baseline_per_rep = None
     if relative:
         if relative_policy not in metrics_dict:
             print(
@@ -453,34 +504,74 @@ def plot_metric(
             relative = False
         else:
             baseline_data = metrics_dict[relative_policy][metric_key]
-            if isinstance(baseline_data, dict) and "mean" in baseline_data:
-                # Compute rolling sum or cumulative mean for baseline
+            # Check if it's 2D array (raw per-rep data) or dict (agg_metrics)
+            if isinstance(baseline_data, np.ndarray) and baseline_data.ndim == 2:
                 if num_period_window is not None:
-                    cumsum = np.cumsum(baseline_data["mean"])
-                    baseline_mean = np.array(
-                        [
-                            (
-                                cumsum[i]
-                                if i < num_period_window
-                                else cumsum[i] - cumsum[i - num_period_window]
-                            )
-                            for i in range(len(baseline_data["mean"]))
-                        ]
+                    baseline_per_rep = _compute_rolling_sum_per_rep(
+                        baseline_data, num_period_window
                     )
                 else:
-                    baseline_mean = np.cumsum(baseline_data["mean"]) / np.arange(
-                        1, len(baseline_data["mean"]) + 1
-                    )
+                    baseline_per_rep = _compute_cumulative_mean_per_rep(baseline_data)
+            else:
+                print(
+                    f"Warning: Expected 2D array for relative_policy '{relative_policy}'. "
+                    "Plotting absolute values instead."
+                )
+                relative = False
 
     for i, (k, metrics) in enumerate(metrics_dict.items()):
         if metric_key not in metrics:
             continue
 
         data = metrics[metric_key]
-        if not isinstance(data, dict) or "mean" not in data:
+
+        # Check if it's 2D array (raw per-rep data) or dict (agg_metrics - legacy)
+        if isinstance(data, np.ndarray) and data.ndim == 2:
+            # Raw per-rep data: compute rolling sum/cumulative mean per rep, then aggregate
+            if num_period_window is not None:
+                processed = _compute_rolling_sum_per_rep(data, num_period_window)
+            else:
+                processed = _compute_cumulative_mean_per_rep(data)
+
+            # Subtract baseline if relative mode is enabled (per-rep subtraction)
+            if relative and baseline_per_rep is not None:
+                # Ensure shapes match
+                min_len = min(processed.shape[1], baseline_per_rep.shape[1])
+                processed = processed[:, :min_len] - baseline_per_rep[:, :min_len]
+
+            # Aggregate across reps
+            raw_mean = np.mean(processed, axis=0)
+            raw_std = np.std(processed, axis=0)
+        elif isinstance(data, dict) and "mean" in data:
+            # Legacy agg_metrics format - keep for backward compatibility
             print(
-                f"Skipping {k}: expected agg_metrics format (dict with 'mean' and 'std')"
+                f"Warning: {k} uses legacy agg_metrics format. Consider using all_metrics."
             )
+            if num_period_window is not None:
+                cumsum = np.cumsum(data["mean"])
+                raw_mean = np.array(
+                    [
+                        (
+                            cumsum[i]
+                            if i < num_period_window
+                            else cumsum[i] - cumsum[i - num_period_window]
+                        )
+                        for i in range(len(data["mean"]))
+                    ]
+                )
+                raw_std = data["std"] * np.sqrt(
+                    np.minimum(np.arange(1, len(data["std"]) + 1), num_period_window)
+                )
+            else:
+                raw_mean = np.cumsum(data["mean"]) / np.arange(1, len(data["mean"]) + 1)
+                raw_std = data["std"] / np.sqrt(np.arange(1, len(data["std"]) + 1))
+
+            if relative and baseline_per_rep is not None:
+                baseline_mean = np.mean(baseline_per_rep, axis=0)
+                min_len = min(len(raw_mean), len(baseline_mean))
+                raw_mean = raw_mean[:min_len] - baseline_mean[:min_len]
+        else:
+            print(f"Skipping {k}: expected 2D array or dict with 'mean' and 'std'")
             continue
 
         # Use same policy colors as box plots
@@ -490,34 +581,6 @@ def plot_metric(
             color = color_raw
         else:
             color = mcolors.to_hex(color_raw[:3])
-
-        # Compute rolling sum or cumulative mean
-        if num_period_window is not None:
-            # Rolling sum: sum_{t=T-W+1}^{T} x_t at each time point
-            cumsum = np.cumsum(data["mean"])
-            raw_mean = np.array(
-                [
-                    (
-                        cumsum[i]
-                        if i < num_period_window
-                        else cumsum[i] - cumsum[i - num_period_window]
-                    )
-                    for i in range(len(data["mean"]))
-                ]
-            )
-            # For std, scale by window size for sum
-            raw_std = data["std"] * np.sqrt(
-                np.minimum(np.arange(1, len(data["std"]) + 1), num_period_window)
-            )
-        else:
-            # Cumulative mean: (1/T) * sum_{t=1}^{T} x_t
-            raw_mean = np.cumsum(data["mean"]) / np.arange(1, len(data["mean"]) + 1)
-            # For std, use cumulative std approximation
-            raw_std = data["std"] / np.sqrt(np.arange(1, len(data["std"]) + 1))
-
-        # Subtract baseline if relative mode is enabled
-        if relative and baseline_mean is not None:
-            raw_mean = raw_mean - baseline_mean
 
         mean_vals = raw_mean[start:]
         std_vals = raw_std[start:]
