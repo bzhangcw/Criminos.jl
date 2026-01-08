@@ -681,6 +681,7 @@ def plot_policy_legend(
     columnspacing=1.0,
     style="line",
     linewidth=6,
+    pad=0.1,
 ):
     """
     Create a standalone legend figure showing policy colors.
@@ -697,6 +698,7 @@ def plot_policy_legend(
         columnspacing: space between columns in legend (default: 1.0, smaller = closer)
         style: "line" for line series legends, "patch" for box plot legends (default: "line")
         linewidth: line width for line style legends (default: 2)
+        pad: padding around the legend (default: 0.1, smaller = tighter)
 
     Returns:
         matplotlib figure object
@@ -754,7 +756,7 @@ def plot_policy_legend(
 
     if figsize is None:
         if orientation == "horizontal":
-            figsize = (min(len(policy_names) * 1.5, 10), 0.5 * nrows)
+            figsize = (min(len(policy_names) * 1.5, 10), 0.3 * nrows)
         else:
             figsize = (2, len(policy_names) * 0.3)
 
@@ -771,7 +773,7 @@ def plot_policy_legend(
         columnspacing=columnspacing,
     )
 
-    plt.tight_layout()
+    plt.tight_layout(pad=pad)
 
     # Determine output format from extension
     if output_path.endswith((".pgf", ".tex")):
@@ -1041,6 +1043,9 @@ def plot_state_distribution(
     return fig, ax
 
 
+# ------------------------------------------------------------
+# Compute metric by risk group H & L and plot them as mirrored bars
+# ------------------------------------------------------------
 def compute_metric_by_risk_group(
     all_metrics,
     settings,
@@ -1105,34 +1110,20 @@ def compute_metric_by_risk_group(
     return results
 
 
-def plot_metric_by_risk_group(
+def plot_risk_group_comparison(
     all_metrics,
     settings,
     median_score,
-    metric_key="x0",
     selected_keys=None,
-    output_path="/tmp/metric_risk_groups.pgf",
-    figsize=(8, 5),
+    output_path="/tmp/risk_group_comparison.pgf",
+    figsize=(10, 5),
     show=True,
 ):
     """
-    Plot bar chart of metric values split by high-risk vs low-risk groups.
+    Plot population and offenses by risk group as mirrored bars.
 
-    For each policy, shows two bars: one for low-risk (score < median) and
-    one for high-risk (score >= median).
-
-    Args:
-        all_metrics: dict of policy_name -> metrics from read_metrics_from_h5
-        settings: SimulationSetup instance with dfi containing score_state
-        median_score: score threshold to split high-risk vs low-risk
-        metric_key: metric to plot (e.g., "x0", "yin", "lv", "tau", "inc")
-        selected_keys: list of policy names to plot (default: all keys in all_metrics)
-        output_path: path to save figure (default: "/tmp/metric_risk_groups.pgf")
-        figsize: figure size tuple (default: (8, 5))
-        show: whether to call plt.show() (default: True)
-
-    Returns:
-        fig, ax: matplotlib figure and axes objects
+    Population bars go upward, offense bars go downward (reflection style).
+    Absolute values annotated on top/bottom, rates at center.
     """
     import matplotlib.pyplot as plt
     import numpy as np
@@ -1149,79 +1140,150 @@ def plot_metric_by_risk_group(
     )
 
     # Compute the totals
-    results = compute_metric_by_risk_group(
-        all_metrics, settings, median_score, metric_key, selected_keys
+    rxx = compute_metric_by_risk_group(
+        all_metrics, settings, median_score, "x0", selected_keys
+    )
+    ryy = compute_metric_by_risk_group(
+        all_metrics, settings, median_score, "yin", selected_keys
     )
 
-    # Prepare data for plotting
-    policies = [p for p in selected_keys if p in results]
-    low_risk_vals = [results[p]["low_risk"] for p in policies]
-    high_risk_vals = [results[p]["high_risk"] for p in policies]
+    policies = [p for p in selected_keys if p in rxx and p in ryy]
 
-    x = np.arange(len(policies))
+    # Extract data
+    x_low = np.array([rxx[p]["low_risk"] for p in policies], dtype=float)
+    x_high = np.array([rxx[p]["high_risk"] for p in policies], dtype=float)
+    y_low = np.array([ryy[p]["low_risk"] for p in policies], dtype=float)
+    y_high = np.array([ryy[p]["high_risk"] for p in policies], dtype=float)
+
+    # Compute rates (safe)
+    rate_low = np.divide(y_low, x_low, out=np.zeros_like(y_low), where=x_low > 0)
+    rate_high = np.divide(y_high, x_high, out=np.zeros_like(y_high), where=x_high > 0)
+
+    # --- CENTERED BINS: define group centers and symmetric offsets ---
+    group_pos = np.arange(len(policies))
     width = 0.35
+    offset = width / 2
+    pos_low = group_pos - offset
+    pos_high = group_pos + offset
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    bars_low = ax.bar(
-        x - width / 2,
-        low_risk_vals,
+    color_low = "#4ECDC4"  # Teal for low-risk
+    color_high = "#FF6B6B"  # Red for high-risk
+
+    # Scale offenses to match population range for visual symmetry
+    max_pop = float(max(x_low.max(initial=0.0), x_high.max(initial=0.0)))
+    max_off = float(max(y_low.max(initial=0.0), y_high.max(initial=0.0)))
+    scale_factor = (max_pop / max_off) if max_off > 0 else 1.0
+
+    y_low_scaled = y_low * scale_factor
+    y_high_scaled = y_high * scale_factor
+
+    # Population bars (upward) and Offense bars (downward, scaled)
+    ax.bar(
+        pos_low,
+        x_low,
         width,
-        label=f"Low-Risk (score $<$ {median_score:.2f})",
-        color="#4ECDC4",
+        label="Population (L)",
+        color=color_low,
+        alpha=0.7,
         edgecolor="black",
-        linewidth=1.5,
+        linewidth=1,
     )
-    bars_high = ax.bar(
-        x + width / 2,
-        high_risk_vals,
+    ax.bar(
+        pos_low,
+        -y_low_scaled,
         width,
-        label=f"High-Risk (score $\\geq$ {median_score:.2f})",
-        color="#FF6B6B",
+        label="Offenses (L)",
+        color=color_low,
+        alpha=1.0,
         edgecolor="black",
-        linewidth=1.5,
+        linewidth=1,
+        hatch="//",
+    )
+    ax.bar(
+        pos_high,
+        x_high,
+        width,
+        label="Population (H)",
+        color=color_high,
+        alpha=0.7,
+        edgecolor="black",
+        linewidth=1,
+    )
+    ax.bar(
+        pos_high,
+        -y_high_scaled,
+        width,
+        label="Offenses (H)",
+        color=color_high,
+        alpha=1.0,
+        edgecolor="black",
+        linewidth=1,
+        hatch="//",
     )
 
-    ax.set_xlabel("Policy", fontsize=14)
-    ax.set_ylabel(metric_key, fontsize=14)
-    ax.set_title(f"{metric_key} by Risk Group", fontsize=16)
-    ax.set_xticks(x)
-    ax.set_xticklabels(policies, fontsize=12)
-    ax.tick_params(axis="both", labelsize=12, width=2)
-    ax.legend(fontsize=11)
-    ax.grid(True, alpha=0.3, linewidth=1.5, axis="y")
+    # Rate at center (just above y=0)
+    for i in range(len(policies)):
+        ax.annotate(
+            f"{rate_low[i]:.3f}",
+            xy=(pos_low[i], 0),
+            xytext=(0, 5),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=14,
+            fontweight="bold",
+        )
+        ax.annotate(
+            f"{rate_high[i]:.3f}",
+            xy=(pos_high[i], 0),
+            xytext=(0, 5),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=14,
+            fontweight="bold",
+        )
+
+    ax.axhline(y=0, color="black", linewidth=1.5)
+
+    # --- ticks centered on the policy bin ---
+    ax.set_xticks(group_pos)
+    ax.set_xticklabels([f"{p} policy" for p in policies], fontsize=16)
+
+    # Tighten x-axis to reduce gaps between policies
+    ax.set_xlim(group_pos[0] - 0.5, group_pos[-1] + 0.5)
+
+    ax.grid(True, alpha=0.3, axis="y")
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{abs(v):.0f}"))
+
+    # Legend on top outside
+    ax.legend(fontsize=12, loc="upper center", bbox_to_anchor=(0.5, 1.15), ncol=4)
 
     for spine in ax.spines.values():
-        spine.set_linewidth(2)
-
-    # Add value labels on bars
-    for bar in bars_low:
-        height = bar.get_height()
-        ax.annotate(
-            f"{height:.1f}",
-            xy=(bar.get_x() + bar.get_width() / 2, height),
-            xytext=(0, 3),
-            textcoords="offset points",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-        )
-    for bar in bars_high:
-        height = bar.get_height()
-        ax.annotate(
-            f"{height:.1f}",
-            xy=(bar.get_x() + bar.get_width() / 2, height),
-            xytext=(0, 3),
-            textcoords="offset points",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-        )
+        spine.set_linewidth(1.5)
 
     fig.tight_layout()
     if output_path:
-        fig.savefig(output_path)
+        fig.savefig(output_path, bbox_inches="tight")
     if show:
         plt.show()
 
+    # Print rates to stdout
+    rate_overall = np.divide(
+        (y_low + y_high),
+        (x_low + x_high),
+        out=np.zeros_like(y_low),
+        where=(x_low + x_high) > 0,
+    )
+    print(
+        f"\n{'Policy':<20} {'Low-Risk Rate':<15} {'High-Risk Rate':<15} {'Overall Rate':<15}"
+    )
+    print("-" * 65)
+    for i, p in enumerate(policies):
+        print(
+            f"{p:<20} {rate_low[i]:<15.4f} {rate_high[i]:<15.4f} {rate_overall[i]:<15.4f}"
+        )
+    print()
     return fig, ax
