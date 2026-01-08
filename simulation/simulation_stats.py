@@ -26,7 +26,7 @@ def summarize_trajectory(
     For each period p (starting from 1):
     - x0: population at start of period (from snapshot p-1), grouped by state at p-1
     - x: population at end of period (from snapshot p), grouped by state at p
-    - y: offenses = j_p - j_{p-1} (difference in felony_arrest)
+    - y: offenses = j_p - j_{p-1} (difference in offenses)
     - y_out: offenses aggregated by state at p-1 (outflow from state)
     - y_in: offenses aggregated by state at p (inflow to state)
     """
@@ -88,14 +88,14 @@ def summarize_trajectory(
         # Get individuals present in both periods
         idx_common = df_presence_begin.index.intersection(df_curr.index)
 
-        # Create merged df with state at p-1, state at p, and felony_arrest at both
+        # Create merged df with state at p-1, state at p, and offenses at both
         df_merged = pd.DataFrame(
             {
                 "index": idx_common,
                 "state_prev": df_prev.loc[idx_common, "state"],
                 "state_curr": df_curr.loc[idx_common, "state"],
-                "j_prev": df_prev.loc[idx_common, "felony_arrest"],
-                "j_curr": df_curr.loc[idx_common, "felony_arrest"],
+                "j_prev": df_prev.loc[idx_common, "offenses"],
+                "j_curr": df_curr.loc[idx_common, "offenses"],
             }
         ).assign(offenses=lambda df: df["j_curr"] - df["j_prev"])
 
@@ -118,15 +118,18 @@ def summarize_trajectory(
         # arrivals and departures
         # arrivals: people arriving at end of period (ep_arrival == _boundary)
         _arrive_now_mask = df_curr["ep_arrival"] == _boundary
+        lmd = df_curr.loc[_arrive_now_mask].groupby(grp_keys_cur)["index"].count()
+
+        # lv: people present at start who leave at boundary due to END_OF_PROCESS (type_left == 1)
         # departures: use df_curr for ep_leaving (set when leaving event processed)
         _leave_now_mask = df_curr["ep_leaving"] == _boundary
-        lmd = df_curr.loc[_arrive_now_mask].groupby(grp_keys_cur)["index"].count()
-        # lv: people present at start who leave at boundary
-        _leave_indices = df_presence_begin.index.intersection(
-            df_curr[_leave_now_mask].index
+        _leave_end_of_process_indices = df_presence_begin.index.intersection(
+            df_curr[_leave_now_mask & (df_curr["type_left"] == 1)].index
         )
         lv = (
-            df_presence_begin.loc[_leave_indices].groupby(grp_keys_cur)["index"].count()
+            df_presence_begin.loc[_leave_end_of_process_indices]
+            .groupby(grp_keys_cur)["index"]
+            .count()
         )
 
         # inc: incarcerated during the period (type_left == 3 means INCARCERATION)
@@ -139,22 +142,10 @@ def summarize_trajectory(
             .count()
         )
 
-        # nr: number of returns during the period (difference in return_times)
-        if "return_times" in df_prev.columns and "return_times" in df_curr.columns:
-            df_returns = pd.DataFrame(
-                {
-                    "index": idx_common,
-                    "state_curr": df_curr.loc[idx_common, "state"],
-                    "rt_prev": df_prev.loc[idx_common, "return_times"],
-                    "rt_curr": df_curr.loc[idx_common, "return_times"],
-                }
-            ).assign(returns=lambda df: df["rt_curr"] - df["rt_prev"])
-            nr = (
-                df_returns[df_returns["returns"] > 0]
-                .groupby("state_curr")["returns"]
-                .sum()
-                .rename_axis(grp_keys_cur[0] if grp_keys_cur else "state")
-            )
+        # nr: number of returns during the period (ep_return == _boundary)
+        if "ep_return" in df_curr.columns:
+            _return_now_mask = df_curr["ep_return"] == _boundary
+            nr = df_curr.loc[_return_now_mask].groupby(grp_keys_cur)["index"].count()
         else:
             nr = pd.Series(dtype=float)
 
@@ -182,7 +173,9 @@ def summarize_trajectory(
                 xcal=lambda df: df.apply(
                     lambda row: row["x0"]
                     + row["lmd"]
+                    + row["nr"]
                     - row["lv"]
+                    - row["inc"]
                     + row["yin"]
                     - row["yout"],
                     axis=1,
@@ -554,12 +547,14 @@ def evaluation_metrics(results_df):
     Returns dict with vectors (one value per episode):
         - total_population: total individuals present (sum of x0)
         - total_offenses: total recidivism events (sum of yin)
+        - total_offenses_treated: offenses by individuals with has_been_treated==1
         - total_enrollment: total treated individuals (sum of tau)
         - total_arrivals: new arrivals (sum of lmd)
         - total_departures: left system (sum of lv)
         - total_incarcerated: incarcerated during period (sum of inc)
         - total_returns: number of returns during period (sum of nr)
         - offense_rate: offenses / population
+        - offense_rate_treated: offenses by treated / population
         - enrollment_rate: enrolled / population
         - incarceration_rate: incarcerated / population
         - return_rate: returns / population
@@ -567,12 +562,14 @@ def evaluation_metrics(results_df):
     metrics = {
         "total_population": [],
         "total_offenses": [],
+        "total_offenses_treated": [],
         "total_enrollment": [],
         "total_arrivals": [],
         "total_departures": [],
         "total_incarcerated": [],
         "total_returns": [],
         "offense_rate": [],
+        "offense_rate_treated": [],
         "enrollment_rate": [],
         "incarceration_rate": [],
         "return_rate": [],
@@ -581,6 +578,16 @@ def evaluation_metrics(results_df):
     for df in results_df:
         pop = df["x0"].sum()
         offenses = df["yin"].sum()
+
+        # Offenses by treated individuals (filter by state where has_been_treated == 1)
+        # State tuple structure: (offenses, age_dist, has_been_treated, stage)
+        # has_been_treated is at index 2
+        try:
+            offenses_treated = df[df.index.map(lambda s: s[2] == 1)]["yin"].sum()
+        except (IndexError, TypeError, KeyError):
+            # If state structure is different or has_been_treated not in state
+            offenses_treated = 0.0
+
         enrolled = df["tau"].sum()
         arrivals = df["lmd"].sum()
         departures = df["lv"].sum()
@@ -589,12 +596,16 @@ def evaluation_metrics(results_df):
 
         metrics["total_population"].append(pop)
         metrics["total_offenses"].append(offenses)
+        metrics["total_offenses_treated"].append(offenses_treated)
         metrics["total_enrollment"].append(enrolled)
         metrics["total_arrivals"].append(arrivals)
         metrics["total_departures"].append(departures)
         metrics["total_incarcerated"].append(incarcerated)
         metrics["total_returns"].append(returns)
         metrics["offense_rate"].append(offenses / pop if pop > 0 else 0.0)
+        metrics["offense_rate_treated"].append(
+            offenses_treated / pop if pop > 0 else 0.0
+        )
         metrics["enrollment_rate"].append(enrolled / pop if pop > 0 else 0.0)
         metrics["incarceration_rate"].append(incarcerated / pop if pop > 0 else 0.0)
         metrics["return_rate"].append(returns / pop if pop > 0 else 0.0)
@@ -603,60 +614,140 @@ def evaluation_metrics(results_df):
     for k in metrics:
         metrics[k] = np.array(metrics[k])
 
-    # Save treatment decisions per episode (flattened for HDF5 storage)
+    # Save per-state data per episode (flattened for HDF5 storage)
+    # Indices are shared between treatment and population data
     # Collect per-episode arrays
     index_list = []
     tau_list = []
     tau_rel_list = []
+    x0_list = []  # population size per state
+    yin_list = []  # offenses per state
+    inc_list = []  # incarcerated per state
+    lv_list = []  # exits/departures per state
     lengths = []
 
     for df in results_df:
         # Index is state tuple - convert to 2D array (n_states x n_dims)
-        idx_arr = np.array(
-            [list(i) if hasattr(i, "__iter__") else [i] for i in df.index]
-        )
+        # Handle mixed types (numbers and strings) by converting strings to codes
+        idx_raw = [list(i) if hasattr(i, "__iter__") else [i] for i in df.index]
+
+        # Convert each element to numeric (encode strings as numbers)
+        idx_numeric = []
+        for state_tuple in idx_raw:
+            numeric_tuple = []
+            for val in state_tuple:
+                if isinstance(val, str):
+                    # Encode string values: 'p' -> 0, 'f' -> 1 (for stage)
+                    # This is a simple encoding scheme
+                    if val == "p":
+                        numeric_tuple.append(0)
+                    elif val == "f":
+                        numeric_tuple.append(1)
+                    else:
+                        # For any other string, use hash or ordinal
+                        numeric_tuple.append(ord(val[0]) if len(val) > 0 else 0)
+                else:
+                    numeric_tuple.append(float(val))
+            idx_numeric.append(numeric_tuple)
+
+        idx_arr = np.array(idx_numeric)
         tau = df["tau"].values if "tau" in df.columns else np.zeros(len(df))
         tau_rel = df["tau_rel"].values if "tau_rel" in df.columns else np.zeros(len(df))
+        x0 = df["x0"].values if "x0" in df.columns else np.zeros(len(df))
+        yin = df["yin"].values if "yin" in df.columns else np.zeros(len(df))
+        inc = df["inc"].values if "inc" in df.columns else np.zeros(len(df))
+        lv = df["lv"].values if "lv" in df.columns else np.zeros(len(df))
         index_list.append(idx_arr)
         tau_list.append(tau)
         tau_rel_list.append(tau_rel)
+        x0_list.append(x0)
+        yin_list.append(yin)
+        inc_list.append(inc)
+        lv_list.append(lv)
         lengths.append(len(df))
 
-    # Flatten into arrays for storage
-    metrics["treatment_index_flat"] = (
+    # Flatten into arrays for storage (indices shared across all per-state metrics)
+    metrics["state_index_flat"] = (
         np.vstack(index_list) if index_list else np.array([])
     )  # shape: (total_states, n_dims)
+    metrics["state_lengths"] = np.array(lengths)  # to reconstruct per-episode arrays
+
+    # Treatment data (uses shared indices)
     metrics["treatment_tau_flat"] = (
         np.concatenate(tau_list) if tau_list else np.array([])
     )
     metrics["treatment_tau_rel_flat"] = (
         np.concatenate(tau_rel_list) if tau_rel_list else np.array([])
     )
-    metrics["treatment_lengths"] = np.array(
-        lengths
-    )  # to reconstruct per-episode arrays
+
+    # Population data (uses shared indices)
+    metrics["population_x0_flat"] = np.concatenate(x0_list) if x0_list else np.array([])
+    metrics["population_yin_flat"] = (
+        np.concatenate(yin_list) if yin_list else np.array([])
+    )
+
+    # Incarcerated and exits data (uses shared indices)
+    metrics["population_inc_flat"] = (
+        np.concatenate(inc_list) if inc_list else np.array([])
+    )
+    metrics["population_lv_flat"] = np.concatenate(lv_list) if lv_list else np.array([])
+
+    # Keep legacy names for backward compatibility
+    metrics["treatment_index_flat"] = metrics["state_index_flat"]
+    metrics["treatment_lengths"] = metrics["state_lengths"]
 
     return metrics
 
 
-def recover_treatment_decision_as_df(metrics, rep=None):
+def recover_per_state_as_df(metrics, rep=None, columns=None):
     """
-    Recover treatment decisions as a DataFrame with MultiIndex.
+    Recover per-state data as a single DataFrame with shared indices.
+
+    Available columns: tau, tau_rel, x0, yin
 
     Args:
         metrics: dict from evaluation_metrics() or all_metrics[policy_name]
         rep: repetition index (required if metrics has multiple reps, i.e. from all_metrics)
+        columns: list of columns to include (default: all available)
+                 e.g., ['tau', 'tau_rel'] for treatment only,
+                       ['x0', 'yin'] for population only,
+                       None for all columns
 
     Returns:
-        pd.DataFrame with columns ['tau', 'tau_rel'] and MultiIndex (state, p)
+        pd.DataFrame with requested columns and MultiIndex (state, p)
         If multiple reps and rep=None, includes 'rep' in the index: (rep, state, p)
     """
     import pandas as pd
 
-    index_flat = metrics["treatment_index_flat"]
-    tau_flat = metrics["treatment_tau_flat"]
-    tau_rel_flat = metrics["treatment_tau_rel_flat"]
-    lengths = metrics["treatment_lengths"]
+    # Use shared index (fall back to legacy name if not present)
+    index_flat = metrics.get("state_index_flat", metrics.get("treatment_index_flat"))
+    lengths = metrics.get("state_lengths", metrics.get("treatment_lengths"))
+
+    # Available data columns
+    available_data = {
+        "tau": metrics.get("treatment_tau_flat"),
+        "tau_rel": metrics.get("treatment_tau_rel_flat"),
+        "x0": metrics.get("population_x0_flat"),
+        "yin": metrics.get("population_yin_flat"),
+        "inc": metrics.get("population_inc_flat"),
+        "lv": metrics.get("population_lv_flat"),
+    }
+
+    # Determine which columns to include
+    if columns is None:
+        # Include all available columns
+        columns = [k for k, v in available_data.items() if v is not None]
+    else:
+        # Validate requested columns
+        for col in columns:
+            if col not in available_data:
+                raise ValueError(
+                    f"Unknown column '{col}'. Available: {list(available_data.keys())}"
+                )
+            if available_data[col] is None:
+                raise ValueError(
+                    f"Column '{col}' not found in metrics. Ensure data was saved with updated evaluation_metrics()."
+                )
 
     # Check if this is multi-rep data (list of arrays) or single-rep (single array)
     is_multi_rep = isinstance(lengths, list)
@@ -665,152 +756,168 @@ def recover_treatment_decision_as_df(metrics, rep=None):
         if rep is not None:
             # Extract single repetition
             index_flat = index_flat[rep]
-            tau_flat = tau_flat[rep]
-            tau_rel_flat = tau_rel_flat[rep]
             lengths = lengths[rep]
+            col_data = {col: available_data[col][rep] for col in columns}
         else:
             # Combine all reps with rep index
             dfs = []
             for r in range(len(lengths)):
                 idx = index_flat[r]
-                tau = tau_flat[r]
-                tau_rel = tau_rel_flat[r]
                 lens = lengths[r]
 
                 states = [tuple(row) for row in idx]
                 episodes = np.repeat(np.arange(len(lens)), lens)
                 reps = np.full(len(states), r)
 
+                # Validate data lengths match index length
+                index_len = len(states)
+                data = {}
+                for col in columns:
+                    col_data = available_data[col][r]
+                    if len(col_data) != index_len:
+                        raise ValueError(
+                            f"Length mismatch for column '{col}' in rep {r}: "
+                            f"data has {len(col_data)} entries but index has {index_len}. "
+                            f"This may indicate the data was saved with a different state structure."
+                        )
+                    data[col] = col_data
+
                 multi_idx = pd.MultiIndex.from_arrays(
                     [reps, states, episodes], names=["rep", "state", "p"]
                 )
-                df = pd.DataFrame({"tau": tau, "tau_rel": tau_rel}, index=multi_idx)
+                df = pd.DataFrame(data, index=multi_idx)
                 dfs.append(df)
             return pd.concat(dfs)
+    else:
+        col_data = {col: available_data[col] for col in columns}
 
-    # Single rep case
+    # Single rep case (or extracted single rep from multi-rep)
     states = [tuple(row) for row in index_flat]
     episodes = np.repeat(np.arange(len(lengths)), lengths)
 
     multi_idx = pd.MultiIndex.from_arrays([states, episodes], names=["state", "p"])
-    df = pd.DataFrame({"tau": tau_flat, "tau_rel": tau_rel_flat}, index=multi_idx)
+    df = pd.DataFrame(col_data, index=multi_idx)
 
     return df
 
 
-def compute_equilibrium_treatment_stats(all_metrics, metric_key="tau", last_n=10):
+# Backward compatibility aliases
+def recover_treatment_decision_as_df(metrics, rep=None):
+    """
+    Recover treatment decisions as a DataFrame with MultiIndex.
+
+    DEPRECATED: Use recover_per_state_as_df(metrics, rep, columns=['tau', 'tau_rel']) instead.
+    """
+    return recover_per_state_as_df(metrics, rep=rep, columns=["tau", "tau_rel"])
+
+
+def recover_population_as_df(metrics, rep=None):
+    """
+    Recover population data as a DataFrame with MultiIndex.
+
+    DEPRECATED: Use recover_per_state_as_df(metrics, rep, columns=['x0', 'yin']) instead.
+    """
+    return recover_per_state_as_df(metrics, rep=rep, columns=["x0", "yin"])
+
+
+def compute_equilibrium_stats(all_metrics, metric_key="tau", last_n=10):
     """
     Compute equilibrium average of a metric over the last N episodes across all reps.
-    Only considers states where bool_in_probation == 1 (last index level), then drops it.
+    Aggregates by (offenses, age_dist), summing across has_been_treated and stage.
 
     Args:
-        all_metrics: dict from read_metrics_from_h5 containing treatment fields:
-            - treatment_index_flat: list of arrays (one per rep) with state tuples
-            - treatment_tau_flat: list of arrays (one per rep)
-            - treatment_tau_rel_flat: list of arrays (one per rep)
-            - treatment_lengths: list of arrays (one per rep) with episode lengths
-        metric_key: "tau" or "tau_rel" (default "tau")
+        all_metrics: dict from read_metrics_from_h5 containing per-state fields
+        metric_key: one of "tau", "tau_rel", "x0", "yin" (default "tau")
         last_n: number of episodes from the end to average over (default 10)
 
     Returns:
         (df_mean, df_std): two DataFrames with:
-            - rows = age (second dim of state)
-            - columns = number of offenses (first dim of state)
-            - df_mean: normalized so all cells sum to 1
-            - df_std: each cell scaled by its mean value (coefficient of variation)
-    """
-    index_flat_list = all_metrics["treatment_index_flat"]
-    tau_flat_list = all_metrics["treatment_tau_flat"]
-    tau_rel_flat_list = all_metrics["treatment_tau_rel_flat"]
-    lengths_list = all_metrics["treatment_lengths"]
+            - rows = age_dist (second dim of state)
+            - columns = offenses (first dim of state)
+            - df_mean: raw mean values (sum across all states with same offenses, age_dist)
+            - df_std: raw std values
 
-    n_reps = len(lengths_list)
+    Note: State structure is (offenses, age_dist, has_been_treated, stage_encoded)
+    """
+    # Recover per-state data as DataFrame using shared function
+    df = recover_per_state_as_df(all_metrics, rep=None, columns=[metric_key])
+
+    # df has MultiIndex (rep, state, p) where state is a tuple
+    # Filter to last_n episodes per rep
+    n_reps = df.index.get_level_values("rep").nunique()
 
     # Collect per-state data across all reps
-    # state_data[state] = [val1, val2, ...] where each entry is one rep's average
+    # state_data[state_key] = [val1, val2, ...] where each entry is one rep's SUM for that episode window
     state_data = defaultdict(list)
 
     for rep in range(n_reps):
-        index_flat = index_flat_list[rep]
-        tau_flat = tau_flat_list[rep]
-        tau_rel_flat = tau_rel_flat_list[rep]
-        lengths = lengths_list[rep]
+        rep_df = df.xs(rep, level="rep")
+        n_episodes = rep_df.index.get_level_values("p").max() + 1
 
-        # Select metric
-        if metric_key == "tau":
-            metric_flat = tau_flat
-        else:
-            metric_flat = tau_rel_flat
-
-        n_episodes = len(lengths)
         if n_episodes < last_n:
             ep_start = 0
         else:
             ep_start = n_episodes - last_n
 
-        # Compute cumulative indices to slice into flat arrays
-        cum_lengths = np.cumsum(lengths)
-        start_indices = np.concatenate([[0], cum_lengths[:-1]])
+        # Filter to last_n episodes
+        rep_df = rep_df[rep_df.index.get_level_values("p") >= ep_start]
 
-        # Collect data for last_n episodes, grouped by state (excluding bool_in_probation)
-        state_metric = defaultdict(list)
+        # First, sum across all states per episode to get total per (offenses, age_dist)
+        # Then take mean across episodes
+        episode_sums = defaultdict(lambda: defaultdict(float))
+        for state, group in rep_df.groupby(level="state"):
+            # State structure: (offenses, age_dist, has_been_treated, stage_encoded)
+            # Use (offenses, age_dist) as key, summing across has_been_treated and stage
+            state_key = (state[0], state[1])
+            for p, val in group[metric_key].items():
+                episode_idx = p[1]  # p is (state, episode_idx)
+                episode_sums[state_key][episode_idx] += val
 
-        for ep in range(ep_start, n_episodes):
-            start_idx = int(start_indices[ep])
-            end_idx = int(cum_lengths[ep])
+        # Now compute mean across episodes for this rep
+        for state_key, ep_vals in episode_sums.items():
+            mean_val = np.mean(list(ep_vals.values()))
+            state_data[state_key].append(mean_val)
 
-            for i in range(start_idx, end_idx):
-                state_tuple = tuple(index_flat[i])
-                # Filter: only in probation (last index == 1)
-                if state_tuple[-1] != 1:
-                    continue
-                # Drop last index level (bool_in_probation)
-                state_key = state_tuple[:-1]
-                state_metric[state_key].append(metric_flat[i])
-
-        # Average over episodes for this rep, store per state
-        for state_key in state_metric:
-            state_data[state_key].append(np.mean(state_metric[state_key]))
-
-    # Build result: rows = age, columns = offenses
-    # state_key = (offenses, age)
+    # Build result: rows = age_dist, columns = offenses
+    # state_key = (offenses, age_dist)
     offenses_set = set()
-    age_set = set()
+    age_dist_set = set()
     for state_key in state_data:
         offenses_set.add(state_key[0])
-        age_set.add(state_key[1])
+        age_dist_set.add(state_key[1])
 
     offenses_sorted = sorted(offenses_set)
-    age_sorted = sorted(age_set)
+    age_dist_sorted = sorted(age_dist_set)
 
     # Create mean and std matrices
     mean_data = {off: {} for off in offenses_sorted}
     std_data = {off: {} for off in offenses_sorted}
 
     for state_key, values in state_data.items():
-        offenses, age = state_key
+        offenses, age_dist = state_key
         arr = np.array(values)
-        mean_data[offenses][age] = np.mean(arr)
-        std_data[offenses][age] = np.std(arr)
+        mean_data[offenses][age_dist] = np.mean(arr)
+        std_data[offenses][age_dist] = np.std(arr)
 
-    # Build DataFrames: rows = age, columns = offenses
-    df_mean_raw = pd.DataFrame(
-        mean_data, index=age_sorted, columns=offenses_sorted
+    # Build DataFrames: rows = age_dist, columns = offenses
+    df_mean = pd.DataFrame(
+        mean_data, index=age_dist_sorted, columns=offenses_sorted
     ).fillna(0)
-    df_std_raw = pd.DataFrame(
-        std_data, index=age_sorted, columns=offenses_sorted
+    df_std = pd.DataFrame(
+        std_data, index=age_dist_sorted, columns=offenses_sorted
     ).fillna(0)
 
-    # Normalize mean_df so all cells sum to 1
-    total_sum = df_mean_raw.values.sum()
-    df_mean = df_mean_raw / total_sum if total_sum > 0 else df_mean_raw
-
-    # Scale std_df by mean values (coefficient of variation)
-    df_std = df_std_raw / df_mean_raw.replace(0, np.nan)
-
-    df_mean.index.name = "age"
+    df_mean.index.name = "age_dist"
     df_mean.columns.name = "offenses"
-    df_std.index.name = "age"
+    df_std.index.name = "age_dist"
     df_std.columns.name = "offenses"
 
-    return df_mean, df_std, df_mean_raw, df_std_raw
+    return df_mean, df_std
+
+
+# Backward compatibility alias
+def compute_equilibrium_treatment_stats(all_metrics, metric_key="tau", last_n=10):
+    """
+    DEPRECATED: Use compute_equilibrium_stats() instead.
+    """
+    return compute_equilibrium_stats(all_metrics, metric_key=metric_key, last_n=last_n)

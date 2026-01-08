@@ -1,18 +1,18 @@
 """
-Simulation setup module - provides common configuration and functions for running policies.
+Simulation setup module - provides common configuration for running policies.
 
 Usage:
-    from simulation_setup import default_settings, run_name, run_sim, tests
-
-    # Run a single policy with repeats
-    simulators = run_name("null", repeat=3)
-
-    # Or run directly
-    sim = run_sim("custom", func_treatment, func_treatment_kwargs, seed=1)
+    from simulation_setup import default_settings, get_tests
 
     # Access settings
     default_settings.p_freeze
     default_settings.treatment_capacity
+
+    # Get test configurations
+    tests = get_tests(default_settings)
+
+Note:
+    run_sim() and run_name() functions have been moved to run_policy.py
 
 Environment variables:
     DBG: 0 = formal run (default), 1 = debug mode with more arrivals
@@ -32,63 +32,80 @@ import input
 class SimulationSetup:
     """Configuration class for simulation parameters."""
 
-    # Default values
-    p_length = 60
-    p_freeze = 0
-    T_max = 30000
-    treatment_capacity = 50
-    treatment_effect = 0.5
-    """@note: try not change to 1
-    1: vital for memory need about 5G RAM
-    2: 1 will be very slow to converge (need many epochs))
-    """
-    beta_arrival = 2
-    communities = {1}
-    fit_kwargs = {
-        "new_col": "felony_arrest",
-        "bool_use_cph": False,
-        "baseline": "exponential",
-    }
-    func_to_call = simulation.arrival_constant
-    state_defs = simulation.StateDefs(
-        ["felony_arrest", "age_dist", "bool_in_probation"]
-    )
-
-    # Treatment eligibility and enrollment settings
-    max_returns = 3
-    str_qualifying_for_treatment = (
-        "bool_left == 0 "
-        + "& bool_in_probation == 1"
-        + "& bool_can_be_treated == 1"
-        + "& has_been_treated == 0"
-    )
-    str_current_enroll = "bool_left == 0 & bool_treat == 1 & bool_in_probation == 1"
-    bool_return_can_be_treated = 1
-    bool_keep_treatment_effect = 1
-
-    # Data (loaded once)
+    # Class-level data (shared across all instances to avoid reloading)
     _data_loaded = False
-    dfr = None
-    df = None
-    df_individual = None
-    df_community = None
-    dfc = None
-    dfi = None
-    dfpop0 = None
-    simulator = None
+    _dfr = None
+    _df = None
+    _df_individual = None
+    _df_community = None
+    _simulator = None
 
-    # Debug mode from environment
-    dbg = int(os.environ.get("DBG", "0"))
+    def __init__(self, print_summary=True):
+        # Debug mode from environment
+        self.dbg = int(os.environ.get("DBG", "0"))
 
-    def __init__(self):
+        # Default values
+        self.p_freeze = 2
+        self.p_freeze_policy = 10  # number of periods to run before updating the policy
+        # @note: previously we use 400 x 40000 is quite stable.
+        self.p_length = 100
+        self.T_max = 40000
+        self.treatment_capacity = 80
+        self.treatment_effect = lambda _: 0.5
+        """@note: try not change to 1
+        1: vital for memory need about 5G RAM
+        2: 1 will be very slow to converge (need many epochs))
+        """
+        self.beta_arrival = 5
+        self.beta_initial = 5
+        self.communities = {1}
+        self.rel_off_probation = 2000
+        self.fit_kwargs = {
+            "new_col": "offenses",
+            "bool_use_cph": False,
+            "baseline": "exponential",
+            # "baseline": "breslow",
+        }
+        self.func_to_call = simulation.arrival_constant
+        self.state_defs = simulation.StateDefs(
+            ["offenses", "age_dist", "has_been_treated", "stage"]
+        )
+
+        # Treatment eligibility and enrollment settings
+        self.max_returns = 25
+        self.max_offenses = 25
+        self.str_qualifying_for_treatment = (
+            "bool_left == 0 "
+            + "& stage == 'p'"
+            + "& bool_can_be_treated == 1"
+            + "& has_been_treated == 0"
+        )
+        self.str_current_enroll = "bool_left == 0 & bool_treat == 1 & stage == 'p'"
+
+        # Boolean flags
+        self.bool_return_can_be_treated = 1
+        self.bool_keep_treatment_effect = 1
+        self.bool_has_incarceration = 1
+
+        # Scalers
+        self.prison_rate_scaler = 1.0
+        self.length_scaler = 1.0
+
+        # Instance-specific data (derived from class-level shared data)
+        self.dfc = None
+        self.dfi = None
+        self.dfpop0 = None
+
         # Adjust settings based on debug mode
         if self.dbg == 1:
             self.beta_arrival = 10
             self.p_length = 250
-            self.T_max = 10000
+            self.T_max = 1000
 
         self._load_data()
-        self._print_summary()
+
+        if print_summary:
+            self._print_summary()
 
     def _print_summary(self):
         """Print summary of main statistics and settings."""
@@ -106,45 +123,90 @@ class SimulationSetup:
         print(f"  T_max:             {self.T_max:,} time units")
         print(f"  p_length:          {self.p_length} (episode length)")
         print(f"  p_freeze:          {self.p_freeze} (freeze period)")
+        print(f"  p_freeze_policy:   {self.p_freeze_policy} (policy freeze period)")
+        print(f"  off_prob:          {self.rel_off_probation} (off-probation term)")
         print(f"  n_episodes:        ~{n_episodes}")
         print("-" * 60)
         print("Treatment Settings:")
         print(f"  capacity:          {self.treatment_capacity} per episode")
-        print(f"  effect:            {self.treatment_effect}")
+        effect_text = getattr(self, "treatment_help_text", str(self.treatment_effect))
+        # Handle multi-line docstrings
+        effect_lines = effect_text.strip().split("\n")
+        print(f"  effect:            {effect_lines[0].strip()}")
+        for line in effect_lines[1:]:
+            print(f"                     {line.strip()}")
+        dosage_text = getattr(
+            self,
+            "treatment_dosage_help_text",
+            str(getattr(self, "treatment_dosage", "default")),
+        )
+        # Handle multi-line docstrings
+        dosage_lines = dosage_text.strip().split("\n")
+        print(f"  dosage:            {dosage_lines[0].strip()}")
+        for line in dosage_lines[1:]:
+            print(f"                     {line.strip()}")
         print(f"  max_returns:       {self.max_returns}")
+        print(f"  max_offenses:      {self.max_offenses}")
         print(f"  return_can_treat:  {self.bool_return_can_be_treated}")
+        print(f"  has_incarceration: {self.bool_has_incarceration}")
+        print(
+            f"  prison_scaler:     {self.prison_rate_scaler} (scaler for prison rate)"
+        )
+        print(
+            f"  length_scaler:     {self.length_scaler} (scaler for probation/off-probation length)"
+        )
         print(f"  qualifying:        {self.str_qualifying_for_treatment}")
         print(f"  current_enroll:    {self.str_current_enroll}")
         print("-" * 60)
         print("Population & Arrivals:")
         print(f"  beta_arrival:      {self.beta_arrival} (arrival rate)")
+        print(f"  beta_initial:      {self.beta_initial} (initial population size)")
         print(f"  communities:       {self.communities}")
         print(f"  initial pop:       {len(self.dfpop0)} individuals")
         print(f"  available pool:    {len(self.dfi)} individuals")
+        print(self.dfi[["age", "age_dist", "weight"]].head(5))
         print("-" * 60)
         print("State Space:")
         print(f"  dimensions:        {state_dims}")
         print(f"  n_states:          {len(self.state_defs.state_key_range)}")
+        print(
+            f"  state weights : (produce state score) \n\t {self.simulator.state_defs.scoring_weights}"
+        )
+        print(f"  final weights:           {self.simulator._scoring_weights}")
         print("=" * 60)
 
     def _load_data(self, ignore_communities=True):
         """Load data and initialize simulator."""
-        if SimulationSetup._data_loaded:
-            return
+        if not SimulationSetup._data_loaded:
+            # Load raw data once at class level
+            (
+                SimulationSetup._dfr,
+                SimulationSetup._df,
+                SimulationSetup._df_individual,
+                SimulationSetup._df_community,
+            ) = input.load_data()
 
-        # Load raw data
-        self.dfr, self.df, self.df_individual, self.df_community = input.load_data()
+            # Create initial simulator for scoring
+            SimulationSetup._simulator = simulation.Simulator(
+                eval_score_fixed=sirakaya.eval_score_fixed,
+                eval_score_comm=sirakaya.eval_score_comm,
+                func_arrival=self.arrival_func,
+                func_leaving=None,
+                state_defs=self.state_defs,
+            )
+            simulation.refit_baseline(
+                SimulationSetup._simulator,
+                SimulationSetup._df_individual,
+                **self.fit_kwargs,
+            )
+            SimulationSetup._data_loaded = True
 
-        # Create initial simulator for scoring
-        self.simulator = simulation.Simulator(
-            eval_score_fixed=sirakaya.eval_score_fixed,
-            eval_score_comm=sirakaya.eval_score_comm,
-            func_arrival=self.arrival_func,
-            func_leaving=None,
-            state_defs=self.state_defs,
-        )
-        simulation.refit_baseline(self.simulator, self.df_individual, **self.fit_kwargs)
-
+        # Reference class-level data in instance
+        self.dfr = SimulationSetup._dfr
+        self.df = SimulationSetup._df
+        self.df_individual = SimulationSetup._df_individual
+        self.df_community = SimulationSetup._df_community
+        self.simulator = SimulationSetup._simulator
         # Filter by communities
         self.dfc = self.df_community[
             self.df_community.index.isin(self.communities)
@@ -161,17 +223,22 @@ class SimulationSetup:
                 self.df_individual["code_county"].isin(self.communities)
             ]
 
+        # here we should assign a few neede new items
         self.dfi = (
             _valid_population.reset_index(drop=True)
             .copy()
             .assign(
-                bool_in_probation=1,
+                stage="p",
+                has_been_treated=0,  # whether the individual has been treated
                 state=lambda x: x.apply(
                     lambda row: self.state_defs.get_state(row), axis=1
                 ),
                 score_state=lambda x: x.apply(
                     lambda row: self.state_defs.get_score(row), axis=1
                 ),
+                score_treatment=0.0,
+            )
+            .assign(
                 score=lambda x: x.apply(
                     lambda row: self.simulator.produce_score(row.name, x), axis=1
                 ),
@@ -179,113 +246,22 @@ class SimulationSetup:
         )
 
         # Sample initial population
-        np.random.seed(123)
-        self.dfpop0 = self.dfi.sample(30)
+        self.assign_weights()
+        self.dfpop0 = self.dfi.sample(self.beta_initial)
 
-        SimulationSetup._data_loaded = True
+    def assign_weights(self):
+        """Assign weights to the individuals so I sample according to the weights."""
+        self.dfi["weight"] = 1.0
+
+        return self.dfi
 
     def arrival_func(self, *args, **kwargs):
-        # Access via class to avoid descriptor binding
-        func = type(self).func_to_call
-        return func(self.beta_arrival, *args, **kwargs)
+        return self.func_to_call(self.beta_arrival, *args, **kwargs)
 
 
 # Create default settings instance
-default_settings = SimulationSetup()
-
-
-def run_sim(
-    name,
-    func_treatment=None,
-    func_treatment_kwargs=None,
-    seed=1,
-    verbosity=2,
-    output_dir=None,
-    settings=None,
-):
-    """Run a single simulation with given treatment function."""
-    if settings is None:
-        settings = default_settings
-
-    simulator = simulation.Simulator(
-        eval_score_fixed=sirakaya.eval_score_fixed,
-        eval_score_comm=sirakaya.eval_score_comm,
-        func_arrival=settings.arrival_func,
-        func_leaving=None,
-        state_defs=settings.state_defs,
-    )
-    simulation.refit_baseline(simulator, settings.df_individual, **settings.fit_kwargs)
-
-    # Determine log path
-    log_path = f"{output_dir}/log.txt" if output_dir else f"results/log.dyn.{name}.log"
-
-    simulator.run(
-        seed=seed,
-        dfc=settings.dfc.copy(),
-        dfi=settings.dfpop0.copy(),
-        dfpop=settings.dfi.copy(),
-        fo=open(log_path, "w"),
-        opt_verbosity=verbosity,
-        T_max=settings.T_max,
-        p_length=settings.p_length,
-        p_freeze=settings.p_freeze,
-        treatment_effect=settings.treatment_effect,
-        func_treatment=func_treatment,
-        func_treatment_kwargs=func_treatment_kwargs,
-        str_qualifying_for_treatment=settings.str_qualifying_for_treatment,
-        str_current_enroll=settings.str_current_enroll,
-        bool_return_can_be_treated=settings.bool_return_can_be_treated,
-        max_returns=settings.max_returns,
-    )
-    if verbosity > 0:
-        print(
-            "people appeared/new",
-            simulator.n_persons_appeared,
-            simulator.n_persons_appeared - simulator.n_persons_initial,
-        )
-    return simulator
-
-
-def run_name(name, repeat=3, start=0, output_dir="results", settings=None):
-    """
-    Run a policy with multiple repeats, saving each to its own directory.
-
-    Args:
-        name: policy name (must be a key in tests dict)
-        repeat: number of repetitions
-        start: starting index for repetition numbering (default 0)
-        output_dir: base directory for outputs
-        settings: SimulationSetup instance (default: default_settings)
-
-    Returns:
-        repeat: the number of repetitions (simulators are not kept in memory)
-    """
-    if settings is None:
-        settings = default_settings
-
-    from simulation_summary import dump_rep_metrics
-
-    policy_tests = get_tests(settings)
-    policy_dir = f"{output_dir}/{name}"
-    os.makedirs(policy_dir, exist_ok=True)
-
-    for k in tqdm(range(start, start + repeat), desc=f"Running {name}"):
-        rep_dir = f"{policy_dir}/{k}"
-        os.makedirs(rep_dir, exist_ok=True)
-
-        sim = run_sim(
-            name,
-            policy_tests[name][0],
-            policy_tests[name][1],
-            seed=k,
-            verbosity=2,
-            output_dir=rep_dir,
-            settings=settings,
-        )
-        dump_rep_metrics(sim, rep_dir, settings.p_freeze)
-        # sim goes out of scope and can be garbage collected
-
-    return repeat
+# Note: Call _print_summary() manually if you need to see the configuration
+default_settings = SimulationSetup(print_summary=False)
 
 
 # ------------------------------------------------------------
@@ -310,12 +286,12 @@ def create_threshj_lowa_prob_vector(j_min=2, a_max=2, j_max=20):
 pr_lowj_lowa = create_lowj_lowa_prob_vector()
 pr_threshj_lowa = create_threshj_lowa_prob_vector()
 thres_cutoff = {
-    1: 0,  # if in age-group 1, cut-off below 1
-    2: 1,  # if in age-group 2, cut-off below 2
-    3: 2,  # if in age-group 3, cut-off below 3
-    4: 3,
-    5: 4,
-    6: 10,
+    1: 4,  # if in age-group 1, cut-off below 1
+    2: 2,  # if in age-group 2, cut-off below 2
+    3: 1,  # if in age-group 3, cut-off below 3
+    4: 1,
+    5: 0,
+    6: 0,
 }
 
 
@@ -349,37 +325,61 @@ def get_tests(settings=None):
                 ascending=True,
             ),
         ),
-        # "low-age-high-prev": (
-        #     smt.treatment_rule_priority,
-        #     dict(
-        #         key="_new_prior",
-        #         capacity=settings.treatment_capacity,
-        #         ascending=True,
-        #         effect=settings.treatment_effect,
-        #         to_compute=lambda df: df.apply(
-        #             lambda row: (row["age_dist"], -row["felony_arrest"]), axis=1
-        #         ),
-        #     ),
-        # ),
-        # "low-age-low-prev": (
-        #     smt.treatment_rule_priority,
-        #     dict(
-        #         key="_new_prior",
-        #         capacity=settings.treatment_capacity,
-        #         ascending=True,
-        #         effect=settings.treatment_effect,
-        #         to_compute=lambda df: df.apply(
-        #             lambda row: (row["age_dist"], row["felony_arrest"]), axis=1
-        #         ),
-        #     ),
-        # ),
-        "high-risk-only-young": (
+        "age-first": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: (row["age"], row["offenses"]), axis=1
+                ),
+            ),
+        ),
+        "age-first-high-risk": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: (row["age"], -row["score_state"]), axis=1
+                ),
+            ),
+        ),
+        "low-risk-young-first": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: (row["score"], row["age"]), axis=1
+                ),
+            ),
+        ),
+        "high-risk-young-first": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: (-row["score"], row["age"]), axis=1
+                ),
+            ),
+        ),
+        "high-risk-cutoff": (
             smt.treatment_rule_priority,
             dict(
                 key="score",
                 capacity=settings.treatment_capacity,
                 ascending=False,
-                exclude=lambda row: row["age_dist"] >= 3,
+                exclude=lambda row: row["score"] >= -1.414,
             ),
         ),
         "age-tolerance": (
@@ -388,29 +388,40 @@ def get_tests(settings=None):
                 key="score",
                 capacity=settings.treatment_capacity,
                 ascending=False,
-                exclude=lambda row: row["felony_arrest"]
-                < thres_cutoff[row["age_dist"]],
+                exclude=lambda row: row["offenses"] < thres_cutoff[row["age_dist"]],
+            ),
+        ),
+        "high-risk-lean-young": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: row["score"] + row["age_dist"] * 0.05, axis=1
+                ),
             ),
         ),
         # ------------------------------------------------------------
         # fluid/probabilistic policies
         # ------------------------------------------------------------
-        "fluid-low-age-low-prev": (
-            smt.treatment_rule_priority_fluid,
-            dict(
-                key="_new_prior",
-                capacity=settings.treatment_capacity,
-                prob_vector=pr_lowj_lowa,
-            ),
-        ),
-        "fluid-low-age-threshold-offenses": (
-            smt.treatment_rule_priority_fluid,
-            dict(
-                key="_new_prior",
-                capacity=settings.treatment_capacity,
-                prob_vector=pr_threshj_lowa,
-            ),
-        ),
+        # "fluid-low-age-low-prev": (
+        #     smt.treatment_rule_priority_fluid,
+        #     dict(
+        #         key="_new_prior",
+        #         capacity=settings.treatment_capacity,
+        #         prob_vector=pr_lowj_lowa,
+        #     ),
+        # ),
+        # "fluid-low-age-threshold-offenses": (
+        #     smt.treatment_rule_priority_fluid,
+        #     dict(
+        #         key="_new_prior",
+        #         capacity=settings.treatment_capacity,
+        #         prob_vector=pr_threshj_lowa,
+        #     ),
+        # ),
     }
 
 

@@ -1,3 +1,4 @@
+import os
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -5,6 +6,9 @@ import seaborn as sns
 import sirakaya
 from lifelines import CoxPHFitter, KaplanMeierFitter, WeibullFitter
 from simulation import Event
+
+# Cache directory for pickle files
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "bin")
 
 cols_attrs = [
     "sex",
@@ -53,7 +57,38 @@ cols_fill_1 = [
 ]
 
 
-def load_data(datadir="./"):
+def load_data(datadir="./", use_cache=True):
+    """
+    Load and process felony 1989 data.
+
+    Args:
+        datadir: Directory containing the felony-1989-final.xlsx file
+        use_cache: If True, load from pickle cache if available, otherwise save to cache
+
+    Returns:
+        Tuple of (dfr, df, df_individual, df_community)
+    """
+    # Define cache file paths
+    cache_files = {
+        "dfr": os.path.join(CACHE_DIR, "dfr.pkl"),
+        "df": os.path.join(CACHE_DIR, "df.pkl"),
+        "df_individual": os.path.join(CACHE_DIR, "df_individual.pkl"),
+        "df_community": os.path.join(CACHE_DIR, "df_community.pkl"),
+    }
+
+    # Check if all cache files exist
+    all_cached = use_cache and all(os.path.exists(f) for f in cache_files.values())
+
+    if all_cached:
+        print("Loading data from pickle cache...")
+        dfr = pd.read_pickle(cache_files["dfr"])
+        df = pd.read_pickle(cache_files["df"])
+        df_individual = pd.read_pickle(cache_files["df_individual"])
+        df_community = pd.read_pickle(cache_files["df_community"])
+        return dfr, df, df_individual, df_community
+
+    # Load from Excel
+    print("Loading data from Excel file...")
     ff = pd.ExcelFile(f"{datadir}/felony-1989-final.xlsx", engine="openpyxl")
     dfr = ff.parse("main", index_col="id")
     dfr_at = ff.parse("artificial", index_col="id")
@@ -95,8 +130,8 @@ def load_data(datadir="./"):
         ),
         # this part is generally unchanged
         score_fixed=lambda df: df.apply(sirakaya.eval_score_fixed, axis=1),
+        score_age_dist=lambda df: df["age_dist"].apply(sirakaya.score_age_dist),
     ).dropna(subset=["score_fixed"])
-    df["score_age_dist"] = sirakaya.score_age_dist_vec(df["age_dist"])
 
     # community data
     df_community = (
@@ -113,6 +148,7 @@ def load_data(datadir="./"):
     df_individual = df.assign(
         rel_pstart=lambda df: df["pstart"] - min_pstart,
         rel_probation=lambda df: df["probation_term"] * 30,
+        offenses=lambda df: df["felony_arrest"].apply(np.round),
     )[
         [
             "observed",
@@ -120,7 +156,7 @@ def load_data(datadir="./"):
             "code_county",
             "rel_pstart",
             "rel_probation",
-            "felony_arrest",
+            "offenses",
             "age_dist",
             "score_fixed",
             "score_age_dist",
@@ -134,8 +170,17 @@ def load_data(datadir="./"):
         age=lambda x: x["age_dist"].apply(sirakaya.age_dist_to_age),
     )
     # avoid float after imputation
-    df_individual["felony_arrest"] = df_individual["felony_arrest"].apply(np.round)
-    df_individual["score_felony_arrest"] = df_individual["felony_arrest"]
+    df_individual["offenses"] = df_individual["offenses"].apply(np.round)
+    df_individual["score_offenses"] = df_individual["offenses"]
+
+    # Save to cache if use_cache is enabled
+    if use_cache:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        print(f"Saving data to pickle cache in {CACHE_DIR}...")
+        dfr.to_pickle(cache_files["dfr"])
+        df.to_pickle(cache_files["df"])
+        df_individual.to_pickle(cache_files["df_individual"])
+        df_community.to_pickle(cache_files["df_community"])
 
     return dfr, df, df_individual, df_community
 

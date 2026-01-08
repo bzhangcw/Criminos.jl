@@ -6,6 +6,10 @@ from lifelines import CoxPHFitter
 from lifelines.fitters import ParametricRegressionFitter
 from scipy.interpolate import interp1d
 from scipy.optimize import curve_fit
+import os
+
+TR_LOW = float(os.getenv("TR_LOW", "15.0"))
+TR_HIGH = float(os.getenv("TR_HIGH", "0.0"))
 
 
 # ------------------------------------------------------------------------------
@@ -22,7 +26,7 @@ def batch_treatment_rule(func):
     Applied periodically to select and enroll individuals into treatment.
 
     - Get qualifying and in-treatment populations
-    - Calculate remaining capacity
+    - Calculate remaining capacity = C - sum(dosage)
     - Apply treatment to selected indices
     - Return selected indices
 
@@ -40,8 +44,16 @@ def batch_treatment_rule(func):
     ):
         people_qualifying = dfi.query(str_qualifying)
         people_intreatment = dfi.query(str_current_enroll)
-        remaining_capacity = capacity - people_intreatment.shape[0]
-
+        remaining_capacity = capacity - people_intreatment["dosage"].sum()
+        print(
+            f"""
+    capacity: {capacity},
+    people_qualifying: {people_qualifying.shape[0]},
+    people_intreatment: {people_intreatment.shape[0]},
+    remaining_capacity: {remaining_capacity},
+    score_range: {people_qualifying["score"].min()} - {people_qualifying["score"].max()},
+"""
+        )
         if remaining_capacity <= 0:
             return []
 
@@ -60,12 +72,6 @@ def batch_treatment_rule(func):
 
         if len(idx_selected) == 0:
             return []
-
-        # Apply treatment to selected
-        dfi.loc[idx_selected, "bool_treat"] = 1.0
-        dfi.loc[idx_selected, "treat_start"] = t
-        dfi.loc[idx_selected, "has_been_treated"] = 1.0
-        dfi.loc[idx_selected, "num_treated"] += 1
 
         return idx_selected
 
@@ -96,7 +102,36 @@ def treatment_rule_priority(
     to_compute = kwargs.get("to_compute", None)
     if to_compute is not None:
         cc[key] = to_compute(cc)
-    return cc.sort_values(key, ascending=ascending).index[:remaining_capacity]
+
+    # Sort candidates by priority
+    sorted_candidates = cc.sort_values(key, ascending=ascending)
+
+    # Read dosages from dataframe and compute cumsum
+    dosages = sorted_candidates["dosage"].values
+    cumsum_dosages = np.cumsum(dosages)
+
+    # Select where cumsum <= remaining_capacity
+    mask = cumsum_dosages <= remaining_capacity
+
+    # Handle ties at the boundary: if there are tied scores at the cutoff,
+    # we must exclude all of them to avoid exceeding capacity
+    if mask.sum() > 0 and mask.sum() < len(mask):
+        # Get the score of the last included candidate
+        last_included_idx = mask.sum() - 1
+        last_included_score = sorted_candidates[key].iloc[last_included_idx]
+
+        # Check if there are ties with the first excluded candidate
+        first_excluded_score = sorted_candidates[key].iloc[last_included_idx + 1]
+
+        if last_included_score == first_excluded_score:
+            # Exclude all candidates with the tied score at the boundary
+            # Use element-wise comparison that handles tuple values correctly
+            tied_mask = sorted_candidates[key] == last_included_score
+            mask = mask & ~tied_mask.values
+    print(
+        f"candidates:\n{sorted_candidates.loc[mask, ['state', 'score', 'score_state', 'score_treatment']]}"
+    )
+    return sorted_candidates.index[mask]
 
 
 @batch_treatment_rule
@@ -104,47 +139,129 @@ def treatment_rule_random(candidates, remaining_capacity, **kwargs):
     """
     Select individuals randomly.
     """
-    n = min(remaining_capacity, len(candidates))
-    return candidates.sample(n).index
+    # Shuffle candidates randomly
+    shuffled = candidates.sample(frac=1)
+
+    # Compute cumsum of dosages
+    cumsum_dosages = np.cumsum(shuffled["dosage"].values)
+
+    # Select where cumsum <= remaining_capacity
+    mask = cumsum_dosages <= remaining_capacity
+    return shuffled.index[mask]
 
 
-@batch_treatment_rule
-def treatment_rule_priority_fluid(
-    candidates, remaining_capacity, prob_vector, state_column="state", **kwargs
-):
+# @batch_treatment_rule
+# def treatment_rule_priority_fluid(
+#     candidates, remaining_capacity, prob_vector, state_column="state", **kwargs
+# ):
+#     """
+#     Priority policy, but may not exhaust the capacity.
+#         The policy is motivated by the fluid model, where we preset a probability vector for
+#         prob_vector = {state s: probability p_s}, s \in S
+#     and each person (in state s) is assigned according to a coin flip with the probability vector.
+
+#     Args:
+#         candidates: DataFrame of qualifying individuals not yet in treatment
+#         remaining_capacity: maximum number of individuals to select
+#         prob_vector: dict mapping state tuple -> probability (0 to 1)
+#         state_column: column name containing the state (default "state")
+#     Returns:
+#         indices of selected individuals (may be fewer than remaining_capacity)
+#     """
+#     selected = []
+#     for idx, row in candidates.iterrows():
+#         if len(selected) >= remaining_capacity:
+#             break
+#         # Get state as tuple
+#         state = row[state_column]
+#         if hasattr(state, "value"):
+#             state_key = tuple(state.value)
+#         else:
+#             state_key = tuple(state) if hasattr(state, "__iter__") else (state,)
+#         # Look up probability for this state (default 0 if not in prob_vector)
+#         prob = prob_vector.get(state_key, 0.0)
+#         # Coin flip with probability
+#         if np.random.random() < prob:
+#             selected.append(idx)
+#     return selected
+
+
+# ------------------------------------------------------------------------------
+# heterogeneous treatment effect functions
+# ------------------------------------------------------------------------------
+def treatment_effect_type_1(row, med=-0.3604, mt_high=TR_HIGH, mt_low=TR_LOW):
     """
-    Priority policy, but may not exhaust the capacity.
-        The policy is motivated by the fluid model, where we preset a probability vector for
-        prob_vector = {state s: probability p_s}, s \in S
-    and each person (in state s) is assigned according to a coin flip with the probability vector.
-
+    Heterogeneous treatment effect based on individual characteristics.
+        "higher score than current risk score, less treatment effect."
+        "H vs. L., baseline = -0.3425"
     Args:
-        candidates: DataFrame of qualifying individuals not yet in treatment
-        remaining_capacity: maximum number of individuals to select
-        prob_vector: dict mapping state tuple -> probability (0 to 1)
-        state_column: column name containing the state (default "state")
+        row: pandas Series representing an individual's data
 
     Returns:
-        indices of selected individuals (may be fewer than remaining_capacity)
+        float: treatment effect value (0-1)
     """
-    selected = []
+    delta = row["score"] - med
+    highr = delta >= 0
+    mt = mt_high if highr else mt_low
+    return -0.3425 * mt
 
-    for idx, row in candidates.iterrows():
-        if len(selected) >= remaining_capacity:
-            break
 
-        # Get state as tuple
-        state = row[state_column]
-        if hasattr(state, "value"):
-            state_key = tuple(state.value)
-        else:
-            state_key = tuple(state) if hasattr(state, "__iter__") else (state,)
+def treatment_effect_type_2(row, med=-0.3604, mt_high=0.1, mt_low=6.0):
+    """
+    Heterogeneous treatment effect based on individual characteristics.
+      "higher state score than the initial mean, less treatment effect."
+    Args:
+        row: pandas Series representing an individual's data
 
-        # Look up probability for this state (default 0 if not in prob_vector)
-        prob = prob_vector.get(state_key, 0.0)
+    Returns:
+        float: treatment effect value (0-1)
+    """
+    # TODO: implement type-1 heterogeneous treatment effect logic
+    delta = row["score_state"] + 0.3604
+    highr = delta >= 0
+    mt = mt_high if highr else mt_low
+    return -0.3425 * mt
 
-        # Coin flip with probability
-        if np.random.random() < prob:
-            selected.append(idx)
 
-    return selected
+def treatment_effect_type_3(row, med=-0.3604, mt_high=0.1, mt_low=6.0):
+    """
+    Heterogeneous treatment effect based on individual characteristics.
+     "more offenses, less treatment effect."
+
+    Args:
+        row: pandas Series representing an individual's data
+
+    Returns:
+        float: treatment effect value (0-1)
+    """
+    # TODO: implement type-1 heterogeneous treatment effect logic
+    delta = row["offenses"] - 1
+    highr = delta >= 0
+    mt = mt_high if highr else mt_low
+    return -0.3425 * mt
+
+
+# ------------------------------------------------------------------------------
+# heterogeneous treatment dosage functions
+# ------------------------------------------------------------------------------
+def treatment_dosage_default(idx, dfi):
+    """
+    Homogeneous treatment dosage.
+    """
+    return 1.0
+
+
+def treatment_dosage_type_1(idx, dfi):
+    """
+    Heterogeneous treatment dosage based on individual characteristics.
+        more offenses, more dosage.
+
+    Args:
+        row: pandas Series representing an individual's data
+
+    Returns:
+        float: treatment dosage value :>=1
+    """
+
+    # return np.sqrt(dfi.at[idx, "offenses"] + 1)
+    return (dfi.at[idx, "offenses"] ** 2) + 1

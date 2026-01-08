@@ -1,4 +1,5 @@
 # survival function fitters
+import json
 import pandas as pd
 from autograd import numpy as np
 from lifelines import CoxPHFitter
@@ -13,14 +14,9 @@ from scipy.optimize import curve_fit
 DEFAULT_SCORING_PARAMS = {
     "score_fixed": 0.7904,
     "score_comm": 0.7904,
-    "score_age_dist": 0.7904,
-    "score_felony_arrest": 0.1884,
+    "score_treatment": 1.0,
+    "score_state": 1.0,
 }
-
-
-# without refitting, just use the original covariates
-def scoring_null(idx, dfi, **kwargs):
-    return dfi.loc[idx, "offset"]
 
 
 def scoring_all(idx, dfi, scoring_weights=DEFAULT_SCORING_PARAMS, **kwargs):
@@ -29,8 +25,10 @@ def scoring_all(idx, dfi, scoring_weights=DEFAULT_SCORING_PARAMS, **kwargs):
     return (
         dfi.loc[idx, "score_fixed"] * scoring_weights["score_fixed"]
         + dfi.loc[idx, "score_comm"] * scoring_weights["score_comm"]
-        + dfi.loc[idx, "score_state"]
         # note the individual state is weighted already.
+        + dfi.loc[idx, "score_state"] * scoring_weights["score_state"]
+        # the treatment effect is applied to the score.
+        + dfi.loc[idx, "score_treatment"] * scoring_weights["score_treatment"]
     )
 
 
@@ -77,37 +75,7 @@ def refit_baseline(
 
 
 def refit_baseline_no_extra(self, df_individual):
-    df_sorted = df_individual.sort_values("time")
-    times = df_sorted["time"].unique()
-    baseline_cumhaz = []
-
-    # Breslow estimate for baseline cumulative hazard
-    for t in times:
-        # Deaths at time t
-        n_deaths = (
-            (df_individual["time"] == t) & (df_individual["observed"] == 1)
-        ).sum()
-        # Risk set at time t
-        risk_set = df_individual["time"] >= t
-        sum_risk = np.sum(np.exp(df_individual.loc[risk_set, "score"]))
-        dLambda = n_deaths / sum_risk if sum_risk > 0 else 0
-        baseline_cumhaz.append((t, dLambda))
-
-    self.cumhaz_df = cumhaz_df = pd.DataFrame(
-        baseline_cumhaz, columns=["time", "dLambda"]
-    )
-    cumhaz_df["Lambda"] = cumhaz_df["dLambda"].cumsum()
-    cumhaz_df["S0"] = np.exp(-cumhaz_df["Lambda"])
-
-    # Step 3: create baseline survival interpolator
-    self.s0_with_interpolation = S0_interp = interp1d(
-        cumhaz_df["time"],
-        cumhaz_df["S0"],
-        kind="previous",
-        fill_value="extrapolate",
-    )
-
-    self.produce_score = scoring_null
+    raise ValueError("refit_baseline_no_extra is not implemented")
 
 
 def refit_baseline_extra(
@@ -118,38 +86,63 @@ def refit_baseline_extra(
     Keeps `survival_function` unchanged by integrating the extra effect
     into each subject's 'score' before recomputing the baseline.
     """
-    df = df_individual
     if verbosity > 0:
         print(df_individual.columns)
 
-    # 2) Fit a Cox model with only new_col as a covariate, old_score as offset
     if baseline in ["gompertz", "breslow"]:
-        self.cph = cph = CoxPHFitter(
-            penalizer=0.15,
-        )
-        cph.fit(
-            df,
-            duration_col="time",
-            event_col="observed",
-            formula=f"offset + {new_col}",
-            show_progress=(verbosity > 0),
+        __refit_baseline_extra_breslow(
+            self, df_individual, new_col, bool_use_cph, baseline, verbosity
         )
     else:
-        if verbosity > 0:
-            print("Using exponential AFT")
         __refit_baseline_extra_aft_exponential(
             self, df_individual, new_col, verbosity=verbosity
         )
-        return
 
-    # 4) Compute a new linear predictor: score = α * offset + β * new_col
+    if verbosity > 0:
+        print("The fitted state weights are:")
+        print(json.dumps(self._scoring_state_weights, indent=4))
+        print("The fitted weights are:")
+        print(json.dumps(self._scoring_weights, indent=4))
+    self.state_defs.scoring_weights = self._scoring_state_weights
+    self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, self._scoring_weights)
+
+
+def __refit_baseline_extra_breslow(
+    self, df_individual, new_col, bool_use_cph=False, baseline="breslow", verbosity=0
+):
+    """
+    Refit baseline hazard using Breslow estimator with Cox PH model.
+
+    Args:
+        self: Simulator object to update
+        df_individual: DataFrame with individual data
+        new_col: Name of the new covariate column
+        bool_use_cph: If True, use CoxPHFitter's baseline survival; otherwise compute manually
+        baseline: "breslow" or "gompertz" (gompertz fits a parametric curve to Breslow estimate)
+        verbosity: Verbosity level for logging
+    """
+    df = df_individual
+
+    # Fit a Cox model with new_col as a covariate, old_score as offset
+    self.cph = cph = CoxPHFitter(
+        penalizer=0.15,
+    )
+    cph.fit(
+        df,
+        duration_col="time",
+        event_col="observed",
+        formula=f"offset + {new_col}",
+        show_progress=(verbosity > 0),
+    )
+
+    # Compute a new linear predictor: score = α * offset + β * new_col
     # @note: the original score is kept in the `offset`
     df_individual["score"] = (
         cph.params_["offset"] * df_individual["offset"]
         + cph.params_[new_col] * df_individual[new_col]
     )
 
-    # 5) Recompute baseline cumulative hazard (Breslow) using combined_score
+    # Recompute baseline cumulative hazard (Breslow) using combined_score
     df_sorted = df_individual.sort_values("time")
     times = df_sorted["time"].unique()
     baseline_cumhaz = []
@@ -186,18 +179,20 @@ def refit_baseline_extra(
         )
 
     self.s0 = self.s0_with_interpolation
-    self._scoring_weights = _scoring_weights = {
-        "score_fixed": cph.params_["lambda_"]["offset"],
-        "score_comm": cph.params_["lambda_"]["offset"],
-        "score_age_dist": cph.params_["lambda_"]["offset"],
-        f"score_{new_col}": cph.params_["lambda_"][new_col],
-    }
-    if verbosity > 0:
-        print(_scoring_weights)
-    self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, _scoring_weights)
-
     if baseline == "gompertz":
         __override_Gompertz(self, verbosity=verbosity)
+
+    print(cph.params_)
+    self._scoring_state_weights = {
+        "score_age_dist": cph.params_["offset"],
+        f"score_{new_col}": cph.params_[new_col],
+    }
+    self._scoring_weights = {
+        "score_fixed": cph.params_["offset"],
+        "score_comm": cph.params_["offset"],
+        "score_state": 1.0,
+        "score_treatment": 1.0,
+    }
 
 
 def __override_Gompertz(self, verbosity=0):
@@ -264,13 +259,93 @@ def __refit_baseline_extra_aft_exponential(self, df_individual, new_col, verbosi
 
     self.s0_with_interpolation = lambda t: np.exp(-λ0 * t)
     self.s0 = self.s0_with_interpolation
-    self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, new_col, _params)
-    self._scoring_weights = _scoring_weights = {
-        "score_fixed": cph.params_["lambda_"]["offset"],
-        "score_comm": cph.params_["lambda_"]["offset"],
+    self._scoring_state_weights = {
         "score_age_dist": cph.params_["lambda_"]["offset"],
         f"score_{new_col}": cph.params_["lambda_"][new_col],
     }
-    if verbosity > 0:
-        print(_scoring_weights)
-    self.produce_score = lambda idx, dfi: scoring_all(idx, dfi, _scoring_weights)
+    self._scoring_weights = {
+        "score_fixed": cph.params_["lambda_"]["offset"],
+        "score_comm": cph.params_["lambda_"]["offset"],
+        "score_state": 1.0,
+        "score_treatment": 1.0,
+    }
+
+
+def plot_score_survival(self, scores, output_path=None, figsize=(8, 4), ax=None):
+    """
+    Plot the survival function S(t | score) for one or more scores.
+
+    The survival function is computed as:
+        S(t | score) = S0(t) ^ exp(score)
+
+    This is consistent with the sampling method in sample_survival_time().
+
+    Args:
+        self: Simulator object with cumhaz_df containing baseline survival
+        scores: A single score value or a list of score values
+        output_path: Optional path to save the figure (without extension, saves .png and .pgf)
+        figsize: Figure size tuple (default: (8, 4))
+        ax: Optional matplotlib axes to plot on (for combining multiple plots)
+
+    Returns:
+        matplotlib axes object
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    # Handle single score or list of scores
+    if not hasattr(scores, "__iter__"):
+        scores = [scores]
+
+    # Get time points and baseline survival from cumhaz_df
+    times = self.cumhaz_df["time"].values
+    S0 = self.cumhaz_df["S0"].values
+
+    # Create figure if ax not provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    # Plot survival for each score
+    for score in scores:
+        S_score = S0 ** np.exp(score)
+        ax.plot(times, S_score, label=f"score={score:.2f}", linewidth=2)
+
+    # Formatting
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Survival Probability")
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(0, 1.05)
+
+    plt.tight_layout()
+
+    # Save if output_path provided
+    if output_path is not None:
+        plt.savefig(output_path + ".png", dpi=300, bbox_inches="tight")
+        plt.savefig(output_path + ".pgf", bbox_inches="tight")
+        print(f"Saved plot to {output_path}.png and {output_path}.pgf")
+
+    return ax
+
+
+def get_survival_probability(self, score, t):
+    """
+    Get the survival probability S(t | score) at a specific time t.
+
+    The survival function is computed as:
+        S(t | score) = S0(t) ^ exp(score)
+
+    Args:
+        self: Simulator object with s0 interpolation function
+        score: The risk score value (single value or array-like)
+        t: Time point to evaluate (single value or array-like)
+
+    Returns:
+        Survival probability (float or array depending on inputs)
+    """
+    S0_t = self.s0(t)
+    return S0_t ** np.exp(score)

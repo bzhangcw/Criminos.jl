@@ -34,12 +34,47 @@ plt.rcParams.update(
 POLICY_COLORS = {
     "null": "#7f7f7f",  # gray
     "random": "#9467bd",  # purple
+    # ------------------------------------------------------------
+    # priority policies; will exhaust the capacity
+    # ------------------------------------------------------------
     "high-risk": "#d62728",  # red
-    "low-risk": "#ff7f0e",  # orange
+    "low-risk": "#546de5",  # green
+    "high-risk-cutoff": "#e377c2",  # pink
     "high-risk-only-young": "#e377c2",  # pink
+    "high-risk-lean-young": "#2ca02c",  # green
+    "age-tolerance": "#17becf",  # cyan
+    "age-first": "#51a3e6",  # soft blue
+    "age-first-high-risk": "#e67051",  # soft red
+    "high-risk-young-first": "#e377c2",  # soft red
+    # ------------------------------------------------------------
+    # fluid policies; may not exhaust the capacity
+    # ------------------------------------------------------------
     "fluid-low-age-low-prev": "#1f77b4",  # blue
     "fluid-low-age-threshold-offenses": "#2ca02c",  # green
-    "age-tolerance": "#17becf",  # cyan
+}
+POLICY_ALIAS = {
+    "age-first": "age-first-low-risk",
+}
+
+# Hatch patterns for legend: policies starting with "age-" get dashed pattern
+# See matplotlib hatch patterns: '/', '\\', '|', '-', '+', 'x', 'o', 'O', '.', '*'
+POLICY_HATCHES = {
+    "age-tolerance": "//",
+    "age-first": "//",
+    "age-first-high-risk": "//",
+    "fluid-low-age-low-prev": "//",
+    "fluid-low-age-threshold-offenses": "//",
+}
+
+# Line styles for plotting series: policies starting with "age-" get dashed lines
+# See matplotlib linestyles: '-' (solid), '--' (dashed), '-.' (dashdot), ':' (dotted)
+POLICY_LINESTYLES = {
+    "age-tolerance": "--",
+    "age-first": "--",
+    "age-first-high-risk": "--",
+    "high-risk-young-first": "--",
+    "fluid-low-age-low-prev": "--",
+    "fluid-low-age-threshold-offenses": "--",
 }
 
 
@@ -52,6 +87,34 @@ def get_policy_color(policy_name, fallback_idx=0):
     # Fallback to tab10 colors
     colors = plt.cm.tab10.colors
     return colors[fallback_idx % len(colors)]
+
+
+def get_policy_hatch(policy_name):
+    """Get hatch pattern for a policy name.
+
+    Returns hatch pattern if defined in POLICY_HATCHES,
+    or '//' for policies starting with 'age-', otherwise None (solid fill).
+    """
+    if policy_name in POLICY_HATCHES:
+        return POLICY_HATCHES[policy_name]
+    # Default: age- policies get dashed hatch, others get solid fill
+    if policy_name.startswith("age-"):
+        return "//"
+    return None
+
+
+def get_policy_linestyle(policy_name):
+    """Get line style for a policy name.
+
+    Returns linestyle if defined in POLICY_LINESTYLES,
+    or '--' for policies starting with 'age-', otherwise '-' (solid line).
+    """
+    if policy_name in POLICY_LINESTYLES:
+        return POLICY_LINESTYLES[policy_name]
+    # Default: age- policies get dashed lines, others get solid lines
+    if policy_name.startswith("age-"):
+        return "--"
+    return "-"
 
 
 # ------------------------------------------------------------
@@ -75,6 +138,11 @@ def dump_rep_metrics(simulator, output_dir, p_freeze):
             p_freeze=p_freeze, state_lst_columns=["state_lst"], state_columns=["state"]
         )
     )
+
+    # also save the dfi as excel file
+    simulator.dfi.to_excel(f"{output_dir}/dfi.xlsx")
+    results_df[-1].to_excel(f"{output_dir}/df_result_last.xlsx")
+
     metrics = simulation.evaluation_metrics(results_df)
 
     # Save to HDF5 file with flat structure (one 1D array per metric)
@@ -84,8 +152,6 @@ def dump_rep_metrics(simulator, output_dir, p_freeze):
             f.create_dataset(metric_key, data=values)
 
     print(f"Saved metrics to {filepath}")
-    # also save the dfi as excel file
-    simulator.dfi.to_excel(f"{output_dir}/dfi.xlsx")
 
 
 def read_metrics_from_h5(name, output_dir="results"):
@@ -129,22 +195,37 @@ def read_metrics_from_h5(name, output_dir="results"):
         all_rep_metrics.append(rep_metrics)
 
     # Stack into matrices and compute aggregates
+    if not all_rep_metrics:
+        raise ValueError(
+            f"No metrics.h5 files found in any repetition directory under {policy_dir}"
+        )
     metric_keys = all_rep_metrics[0].keys()
     policy_metrics = {}
     policy_agg = {}
 
-    # Treatment fields are flattened and vary in length - store as list, no aggregates
-    treatment_keys = {
-        "treatment_index_flat",
+    # Per-state fields are flattened and vary in length - store as list, no aggregates
+    # These share the same index structure (state_index_flat / state_lengths)
+    per_state_keys = {
+        # Shared indices
+        "state_index_flat",
+        "state_lengths",
+        # Treatment data
         "treatment_tau_flat",
         "treatment_tau_rel_flat",
+        # Population data
+        "population_x0_flat",
+        "population_yin_flat",
+        "population_inc_flat",
+        "population_lv_flat",
+        # Legacy names (for backward compatibility)
+        "treatment_index_flat",
         "treatment_lengths",
     }
 
     for metric_key in metric_keys:
         arrays = [m[metric_key] for m in all_rep_metrics]
 
-        if metric_key in treatment_keys:
+        if metric_key in per_state_keys:
             # Store as list of arrays (no stacking/aggregation)
             policy_metrics[metric_key] = arrays
             # No aggregation for treatment fields
@@ -336,9 +417,49 @@ def add_to_metrics(all_metrics, agg_metrics, k, simulators, p_freeze, windowsize
     return all_metrics, agg_metrics
 
 
+from simulation_stats_test import *
+
+
 # ------------------------------------------------------------
 # plot metrics from all_metrics, which is a dict of results
 # ------------------------------------------------------------
+def _compute_rolling_sum_per_rep(data_2d, num_period_window):
+    """
+    Compute rolling sum over window for each rep.
+
+    Args:
+        data_2d: 2D array (n_reps, n_episodes)
+        num_period_window: window size for rolling sum
+
+    Returns:
+        2D array (n_reps, n_episodes) with rolling sums
+    """
+    n_reps, n_episodes = data_2d.shape
+    cumsum = np.cumsum(data_2d, axis=1)
+    result = np.zeros_like(data_2d)
+    for i in range(n_episodes):
+        if i < num_period_window:
+            result[:, i] = cumsum[:, i]
+        else:
+            result[:, i] = cumsum[:, i] - cumsum[:, i - num_period_window]
+    return result
+
+
+def _compute_cumulative_mean_per_rep(data_2d):
+    """
+    Compute cumulative mean for each rep.
+
+    Args:
+        data_2d: 2D array (n_reps, n_episodes)
+
+    Returns:
+        2D array (n_reps, n_episodes) with cumulative means
+    """
+    cumsum = np.cumsum(data_2d, axis=1)
+    divisor = np.arange(1, data_2d.shape[1] + 1)
+    return cumsum / divisor
+
+
 def plot_metric(
     metrics_dict,
     metric_key,
@@ -347,33 +468,123 @@ def plot_metric(
     show_ci=True,
     start=20,
     output_path=None,
+    num_period_window=None,
+    relative=False,
+    relative_policy="null",
 ):
     """
     Plot a single metric for all simulations with confidence intervals.
-    Computes cumulative mean: (1/T) * sum_{t=1}^{T} x_t
+    Uses raw per-rep data for consistent statistics with equilibrium computation.
+    Computes rolling sum over last num_period_window periods per rep, then aggregates.
+    If num_period_window is None, computes cumulative mean per rep, then aggregates.
 
     Args:
-        metrics_dict: either all_metrics or agg_metrics from collect_metrics()
+        metrics_dict: all_metrics from collect_metrics() (dict with 2D arrays per metric)
         metric_key: e.g. 'total_population', 'total_offenses', 'total_enrollment',
                     'total_incarcerated', 'total_returns', 'offense_rate', etc.
         ylabel: optional y-axis label (defaults to metric_key)
         title: optional plot title
-        show_ci: whether to show confidence interval (min/max band)
+        show_ci: whether to show confidence interval (mean ± 2*std band)
         start: starting episode index (skip first N episodes)
         output_path: path to save PDF (default: /tmp/{metric_key}-trend.pdf)
+        num_period_window: window size for rolling sum (if None, uses cumulative mean)
+        relative: if True, plot values relative to relative_policy (default: False)
+        relative_policy: policy name to use as baseline for relative plots (default: "null")
     """
     fig = go.Figure()
     import matplotlib.colors as mcolors
 
-    def cumulative_mean(arr):
-        """Compute cumulative mean: (1/T) * sum_{t=1}^{T} x_t"""
-        return np.cumsum(arr) / np.arange(1, len(arr) + 1)
+    # Compute baseline values if relative mode is enabled (per-rep)
+    baseline_per_rep = None
+    if relative:
+        if relative_policy not in metrics_dict:
+            print(
+                f"Warning: relative_policy '{relative_policy}' not found in metrics_dict. "
+                "Plotting absolute values instead."
+            )
+            relative = False
+        elif metric_key not in metrics_dict[relative_policy]:
+            print(
+                f"Warning: metric_key '{metric_key}' not found for relative_policy '{relative_policy}'. "
+                "Plotting absolute values instead."
+            )
+            relative = False
+        else:
+            baseline_data = metrics_dict[relative_policy][metric_key]
+            # Check if it's 2D array (raw per-rep data) or dict (agg_metrics)
+            if isinstance(baseline_data, np.ndarray) and baseline_data.ndim == 2:
+                if num_period_window is not None:
+                    baseline_per_rep = _compute_rolling_sum_per_rep(
+                        baseline_data, num_period_window
+                    )
+                else:
+                    baseline_per_rep = _compute_cumulative_mean_per_rep(baseline_data)
+            else:
+                print(
+                    f"Warning: Expected 2D array for relative_policy '{relative_policy}'. "
+                    "Plotting absolute values instead."
+                )
+                relative = False
 
     for i, (k, metrics) in enumerate(metrics_dict.items()):
         if metric_key not in metrics:
             continue
 
         data = metrics[metric_key]
+
+        # Check if it's 2D array (raw per-rep data) or dict (agg_metrics - legacy)
+        if isinstance(data, np.ndarray) and data.ndim == 2:
+            # Raw per-rep data: compute rolling sum/cumulative mean per rep, then aggregate
+            if num_period_window is not None:
+                processed = _compute_rolling_sum_per_rep(data, num_period_window)
+            else:
+                processed = _compute_cumulative_mean_per_rep(data)
+
+            # Subtract baseline if relative mode is enabled (per-rep subtraction)
+            if relative and baseline_per_rep is not None:
+                # Ensure shapes match (both rows/reps and columns/time)
+                min_reps = min(processed.shape[0], baseline_per_rep.shape[0])
+                min_len = min(processed.shape[1], baseline_per_rep.shape[1])
+                processed = (
+                    processed[:min_reps, :min_len]
+                    - baseline_per_rep[:min_reps, :min_len]
+                )
+
+            # Aggregate across reps
+            raw_mean = np.mean(processed, axis=0)
+            raw_std = np.std(processed, axis=0)
+        elif isinstance(data, dict) and "mean" in data:
+            # Legacy agg_metrics format - keep for backward compatibility
+            print(
+                f"Warning: {k} uses legacy agg_metrics format. Consider using all_metrics."
+            )
+            if num_period_window is not None:
+                cumsum = np.cumsum(data["mean"])
+                raw_mean = np.array(
+                    [
+                        (
+                            cumsum[i]
+                            if i < num_period_window
+                            else cumsum[i] - cumsum[i - num_period_window]
+                        )
+                        for i in range(len(data["mean"]))
+                    ]
+                )
+                raw_std = data["std"] * np.sqrt(
+                    np.minimum(np.arange(1, len(data["std"]) + 1), num_period_window)
+                )
+            else:
+                raw_mean = np.cumsum(data["mean"]) / np.arange(1, len(data["mean"]) + 1)
+                raw_std = data["std"] / np.sqrt(np.arange(1, len(data["std"]) + 1))
+
+            if relative and baseline_per_rep is not None:
+                baseline_mean = np.mean(baseline_per_rep, axis=0)
+                min_len = min(len(raw_mean), len(baseline_mean))
+                raw_mean = raw_mean[:min_len] - baseline_mean[:min_len]
+        else:
+            print(f"Skipping {k}: expected 2D array or dict with 'mean' and 'std'")
+            continue
+
         # Use same policy colors as box plots
         color_raw = get_policy_color(k, fallback_idx=i)
         # Convert to hex for Plotly
@@ -382,32 +593,10 @@ def plot_metric(
         else:
             color = mcolors.to_hex(color_raw[:3])
 
-        # Auto-detect format: agg_metrics has dict with 'mean', all_metrics has ndarray
-        if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: compute cumulative mean
-            raw_mean = cumulative_mean(data["mean"])
-            # For std, use cumulative std approximation
-            raw_std = data["std"] / np.sqrt(np.arange(1, len(data["std"]) + 1))
-            mean_vals = raw_mean[start:]
-            std_vals = raw_std[start:]
-            min_vals = np.maximum(mean_vals - 1 * std_vals, 0)
-            max_vals = mean_vals + 1 * std_vals
-        elif isinstance(data, np.ndarray):
-            # all_metrics format (matrix: repeats x episodes)
-            if data.ndim == 2:
-                # Compute cumulative mean for each repetition
-                cum_means = np.array([cumulative_mean(row) for row in data])
-                mean_vals = np.mean(cum_means[:, start:], axis=0)
-                std_vals = np.std(cum_means[:, start:], axis=0)
-                min_vals = np.maximum(mean_vals - 1.5 * std_vals, 0)
-                max_vals = mean_vals + 1.5 * std_vals
-            else:
-                # 1D array (single run)
-                cum_mean = cumulative_mean(data)
-                mean_vals = cum_mean[start:]
-                min_vals = max_vals = None
-        else:
-            continue
+        mean_vals = raw_mean[start:]
+        std_vals = raw_std[start:]
+        min_vals = mean_vals - 2 * std_vals
+        max_vals = mean_vals + 2 * std_vals
 
         # Episodes start from (start)
         episodes = np.arange(start, start + len(mean_vals))
@@ -481,6 +670,123 @@ def plot_metric(
     return fig
 
 
+def plot_policy_legend(
+    policy_names=None,
+    output_path="/tmp/legend.pdf",
+    ncol=None,
+    nrows=1,
+    orientation="horizontal",
+    figsize=None,
+    alpha=0.6,
+    columnspacing=1.0,
+    style="line",
+    linewidth=6,
+):
+    """
+    Create a standalone legend figure showing policy colors.
+
+    Args:
+        policy_names: list of policy names to include (default: all in POLICY_COLORS)
+        output_path: path to save the file (default "/tmp/legend.pdf")
+                     Supports .pdf, .png, .pgf, or .tex extensions
+        ncol: number of columns in legend (default: auto based on orientation and nrows)
+        nrows: number of rows to display legend items (default: 1)
+        orientation: "horizontal" or "vertical"
+        figsize: tuple (width, height) in inches (default: auto)
+        alpha: transparency for patches (default 0.6 to match box plots)
+        columnspacing: space between columns in legend (default: 1.0, smaller = closer)
+        style: "line" for line series legends, "patch" for box plot legends (default: "line")
+        linewidth: line width for line style legends (default: 2)
+
+    Returns:
+        matplotlib figure object
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    import matplotlib.lines as mlines
+    import matplotlib.colors as mcolors
+
+    if policy_names is None:
+        policy_names = list(POLICY_COLORS.keys())
+
+    # Create legend handles
+    handles = []
+    for i, name in enumerate(policy_names):
+        if name in POLICY_ALIAS:
+            real_name = POLICY_ALIAS[name]
+        else:
+            real_name = name
+        color = get_policy_color(name, fallback_idx=i)
+
+        if style == "line":
+            # Line style for series plots
+            linestyle = get_policy_linestyle(name)
+            line = mlines.Line2D(
+                [],
+                [],
+                color=color,
+                linestyle=linestyle,
+                linewidth=linewidth,
+                label=real_name,
+            )
+            handles.append(line)
+        else:
+            # Patch style for box plots
+            hatch = get_policy_hatch(name)
+            # Convert to RGBA with alpha
+            if isinstance(color, str) and color.startswith("#"):
+                rgb = mcolors.hex2color(color)
+                facecolor = (*rgb, alpha)
+            else:
+                facecolor = (*color[:3], alpha)
+            patch = mpatches.Patch(
+                facecolor=facecolor, edgecolor=color, hatch=hatch, label=name
+            )
+            handles.append(patch)
+
+    # Determine layout
+    if ncol is None:
+        if orientation == "horizontal":
+            # Distribute items across nrows
+            ncol = (len(policy_names) + nrows - 1) // nrows  # Ceiling division
+        else:
+            ncol = 1
+
+    if figsize is None:
+        if orientation == "horizontal":
+            figsize = (min(len(policy_names) * 1.5, 10), 0.5 * nrows)
+        else:
+            figsize = (2, len(policy_names) * 0.3)
+
+    # Create figure with just the legend
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis("off")
+
+    # Use global font with size 10 for legend
+    legend = ax.legend(
+        handles=handles,
+        loc="center",
+        ncol=ncol,
+        frameon=False,
+        columnspacing=columnspacing,
+    )
+
+    plt.tight_layout()
+
+    # Determine output format from extension
+    if output_path.endswith((".pgf", ".tex")):
+        # Save as PGF/TikZ for LaTeX
+        plt.savefig(output_path, bbox_inches="tight", backend="pgf")
+    else:
+        # Save as PDF or PNG
+        plt.savefig(output_path, bbox_inches="tight", dpi=150)
+
+    plt.show()
+
+    print(f"Saved legend to {output_path}")
+    return fig
+
+
 # ------------------------------------------------------------
 # main function to produce figures for the papers.
 # ------------------------------------------------------------
@@ -493,13 +799,15 @@ def plot_to_tex_equilibrium_box(
     title=None,
     output_path="/tmp/fig.pdf",
     show_labels=False,
+    num_period_window=None,
 ):
     """
     Plot the equilibrium box plot for the given metric.
-    Computes mean over ALL episodes: (1/T) * sum_{t=1}^{T} x_t
+    Computes sum over last num_period_window periods: sum_{t=T-W+1}^{T} x_t for each repetition
+    If num_period_window is None, computes mean over ALL episodes: (1/T) * sum_{t=1}^{T} x_t
 
     Args:
-        metrics_dict: either all_metrics or agg_metrics from collect_metrics()
+        metrics_dict: policy_metrics from read_metrics_from_h5() (dict with 2D arrays: repeats x episodes)
         metric_key: e.g. 'total_population', 'total_offenses', 'total_enrollment',
                     'total_incarcerated', 'total_returns', 'offense_rate', etc.
         ylabel: optional y-axis label (defaults to metric_key)
@@ -507,6 +815,7 @@ def plot_to_tex_equilibrium_box(
         output_path: path to save the file (default "/tmp/fig.pdf")
                      Supports .pdf, .png, .pgf, or .tex extensions
         show_labels: if True, show policy names on x-axis (default False)
+        num_period_window: window size for sum over last periods (if None, uses mean over all)
     """
 
     # Collect data for box plot: list of (policy_name, flattened_values)
@@ -518,25 +827,19 @@ def plot_to_tex_equilibrium_box(
             continue
 
         data = metrics[metric_key]
+        if not isinstance(data, np.ndarray) or data.ndim != 2:
+            print(f"Skipping {k}: expected 2D array format (repeats x episodes)")
+            continue
 
-        # Auto-detect format and compute mean over ALL episodes
-        if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: mean over ALL episodes
-            vals = np.array([np.mean(data["mean"])])
-            box_data.append(vals)
-            labels.append(k)
-        elif isinstance(data, np.ndarray):
-            if data.ndim == 2:
-                # all_metrics format (matrix: repeats x episodes)
-                # Mean over ALL episodes for each repetition
-                vals = np.mean(data, axis=1)
-                box_data.append(vals)
-                labels.append(k)
-            else:
-                # 1D array (single run): mean over ALL episodes
-                vals = np.array([np.mean(data)])
-                box_data.append(vals)
-                labels.append(k)
+        # Compute sum over last num_period_window or mean over ALL episodes for each repetition
+        if num_period_window is not None:
+            # Sum over last num_period_window periods for each repetition
+            vals = np.sum(data[:, -num_period_window:], axis=1)
+        else:
+            # Mean over ALL episodes for each repetition
+            vals = np.mean(data, axis=1)
+        box_data.append(vals)
+        labels.append(k)
 
     if not box_data:
         print(f"No data found for metric '{metric_key}'")
@@ -544,7 +847,7 @@ def plot_to_tex_equilibrium_box(
 
     # Create box plot
     fig, ax = plt.subplots(
-        figsize=(max(6, len(labels) * 1.2), 5),
+        figsize=(max(6, len(labels) * 1.2), 3.5),
     )
 
     # Use empty labels if show_labels is False
@@ -590,255 +893,335 @@ def plot_to_tex_equilibrium_box(
     return fig
 
 
-import numpy as np
-import pandas as pd
-from scipy.stats import ks_2samp
-
-
-def fsd_test(xa, xb, alpha=0.05):
-    """
-    Test if xa first-order stochastically dominates xb (xa is better, i.e., lower values).
-
-    For lower-is-better metrics (like number of offenses):
-    - xa dominates xb if F_a(x) >= F_b(x) for all x
-    - Meaning: xa has more probability mass on lower (better) values
-    - Equivalently: the CDF of xa is always above or equal to the CDF of xb
-
-    Args:
-        xa: array of values for policy A (lower is better)
-        xb: array of values for policy B (lower is better)
-        alpha: significance level for hypothesis test
-
-    Returns:
-        dict with keys:
-            - ks_stat: KS test statistic
-            - p_value: p-value for one-sided KS test (H1: xa dominates xb)
-            - fsd_empirical: True if F_a(x) >= F_b(x) everywhere (empirical FSD)
-            - reject_at_alpha: True if we reject null at given alpha
-    """
-    xa, xb = np.asarray(xa), np.asarray(xb)
-
-    # For lower-is-better: xa dominates xb if F_a >= F_b
-    # KS test with alternative='greater' tests if CDF of xa is above CDF of xb
-    # This means xa has more mass on lower values (is better)
-    ks = ks_2samp(xa, xb, alternative="greater")
-
-    # empirical FSD check: F_a(x) >= F_b(x) for all x
-    # (xa's CDF should be above or equal to xb's CDF everywhere)
-    grid = np.sort(np.unique(np.r_[xa, xb]))
-    Fa = np.searchsorted(np.sort(xa), grid, side="right") / len(xa)
-    Fb = np.searchsorted(np.sort(xb), grid, side="right") / len(xb)
-    # xa dominates xb if Fa >= Fb everywhere (more mass on lower values)
-    no_cross = np.all(Fa >= Fb - 1e-12)
-
-    return {
-        "ks_stat": ks.statistic,
-        "p_value": ks.pvalue,
-        "fsd_empirical": bool(no_cross),
-        "reject_at_alpha": ks.pvalue < alpha,
-    }
-
-
-def pairwise_fsd_test(
-    metrics_dict,
-    metric_key,
-    alpha=0.05,
-    return_format="dataframe",
+def plot_state_distribution(
+    all_metrics,
+    settings,
+    selected_keys=None,
+    metric_key="lv",
+    score_cap=10,
+    score_filter=None,
+    median_score=None,
+    output_path="/tmp/score_cdf.pgf",
+    figsize=(10, 5),
+    show=True,
 ):
     """
-    Perform pairwise FSD tests between all policies using data from box plot statistics.
-    Computes mean over ALL episodes: (1/T) * sum_{t=1}^{T} x_t
+    Plot cumulative distribution of population by risk score across policies.
 
     Args:
-        metrics_dict: either all_metrics or agg_metrics from collect_metrics()
-        metric_key: which metric to test (e.g., 'num_offense', 'num_treated')
-        alpha: significance level for hypothesis test (default: 0.05)
-        return_format: "dataframe" or "dict" (default: "dataframe")
+        all_metrics: dict of policy_name -> metrics from read_metrics_from_h5
+        settings: SimulationSetup instance with dfi containing score_state
+        selected_keys: list of policy names to plot (default: ["high-risk", "low-risk"])
+        metric_key: metric to use for population (default: "lv")
+        score_cap: maximum score value to cap at (default: 10)
+        score_filter: "high" for score >= median_score, "low" for score < median_score, None for all
+        median_score: score threshold when using score_filter
+        output_path: path to save figure (default: "/tmp/score_cdf.pgf")
+        figsize: figure size tuple (default: (10, 5))
+        show: whether to call plt.show() (default: True)
 
     Returns:
-        If return_format="dataframe":
-            A pandas DataFrame with MultiIndex columns containing:
-            - p_value: p-value matrix (row dominates column if p < alpha)
-            - ks_stat: KS statistic matrix
-            - fsd_empirical: empirical FSD matrix (True if row dominates column)
-            - mean_diff: mean difference matrix (row - column, negative means row is better)
-
-        If return_format="dict":
-            Dictionary with keys 'p_value', 'ks_stat', 'fsd_empirical', 'mean_diff',
-            each containing a DataFrame with policies as both rows and columns.
-
-    Example:
-        >>> results = pairwise_fsd_test(all_metrics, 'num_offense', last_n=5)
-        >>> # Check if 'high-risk' dominates 'null' at alpha=0.05
-        >>> results['p_value'].loc['high-risk', 'null'] < 0.05
-    """
-    # Collect data for each policy (same as box plot)
-    policy_data = {}
-
-    for k, metrics in metrics_dict.items():
-        if metric_key not in metrics:
-            continue
-
-        data = metrics[metric_key]
-
-        # Auto-detect format and compute mean over ALL episodes
-        if isinstance(data, dict) and "mean" in data:
-            # agg_metrics format: mean over ALL episodes
-            vals = np.array([np.mean(data["mean"])])
-        elif isinstance(data, np.ndarray):
-            if data.ndim == 2:
-                # all_metrics format (matrix: repeats x episodes)
-                # Mean over ALL episodes for each repetition
-                vals = np.mean(data, axis=1)
-            else:
-                # 1D array (single run): mean over ALL episodes
-                vals = np.array([np.mean(data)])
-        else:
-            continue
-
-        policy_data[k] = vals
-
-    if not policy_data:
-        print(f"No data found for metric '{metric_key}'")
-        return None
-
-    policies = list(policy_data.keys())
-    n_policies = len(policies)
-
-    # Initialize result matrices
-    p_values = np.full((n_policies, n_policies), np.nan)
-    ks_stats = np.full((n_policies, n_policies), np.nan)
-    fsd_empirical = np.full((n_policies, n_policies), False)
-    mean_diffs = np.full((n_policies, n_policies), np.nan)
-
-    # Perform pairwise tests
-    for i, policy_a in enumerate(policies):
-        for j, policy_b in enumerate(policies):
-            if i == j:
-                # Diagonal: policy compared to itself
-                p_values[i, j] = 1.0
-                ks_stats[i, j] = 0.0
-                fsd_empirical[i, j] = True
-                mean_diffs[i, j] = 0.0
-            else:
-                xa = policy_data[policy_a]
-                xb = policy_data[policy_b]
-
-                # Test if policy_a dominates policy_b
-                result = fsd_test(xa, xb, alpha=alpha)
-                p_values[i, j] = result["p_value"]
-                ks_stats[i, j] = result["ks_stat"]
-                fsd_empirical[i, j] = result["fsd_empirical"]
-                mean_diffs[i, j] = np.mean(xa) - np.mean(xb)
-
-    # Create DataFrames with policy names as index and columns
-    p_value_df = pd.DataFrame(p_values, index=policies, columns=policies)
-    ks_stat_df = pd.DataFrame(ks_stats, index=policies, columns=policies)
-    fsd_empirical_df = pd.DataFrame(fsd_empirical, index=policies, columns=policies)
-    mean_diff_df = pd.DataFrame(mean_diffs, index=policies, columns=policies)
-
-    if return_format == "dict":
-        return {
-            "p_value": p_value_df,
-            "ks_stat": ks_stat_df,
-            "fsd_empirical": fsd_empirical_df,
-            "mean_diff": mean_diff_df,
-        }
-    else:
-        # Return as MultiIndex DataFrame
-        result_df = pd.concat(
-            [p_value_df, ks_stat_df, fsd_empirical_df, mean_diff_df],
-            keys=["p_value", "ks_stat", "fsd_empirical", "mean_diff"],
-            axis=1,
-        )
-        return result_df
-
-
-def plot_policy_legend(
-    policy_names=None,
-    output_path="/tmp/legend.pdf",
-    ncol=None,
-    nrows=1,
-    orientation="horizontal",
-    figsize=None,
-    alpha=0.6,
-    columnspacing=1.0,
-):
-    """
-    Create a standalone legend figure showing policy colors.
-
-    Args:
-        policy_names: list of policy names to include (default: all in POLICY_COLORS)
-        output_path: path to save the file (default "/tmp/legend.pdf")
-                     Supports .pdf, .png, .pgf, or .tex extensions
-        ncol: number of columns in legend (default: auto based on orientation and nrows)
-        nrows: number of rows to display legend items (default: 1)
-        orientation: "horizontal" or "vertical"
-        figsize: tuple (width, height) in inches (default: auto)
-        alpha: transparency for patches (default 0.6 to match box plots)
-        columnspacing: space between columns in legend (default: 1.0, smaller = closer)
-
-    Returns:
-        matplotlib figure object
+        fig, ax: matplotlib figure and axes objects
     """
     import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-    import matplotlib.colors as mcolors
+    import numpy as np
+    from simulation_stats import compute_equilibrium_stats
 
-    if policy_names is None:
-        policy_names = list(POLICY_COLORS.keys())
+    if selected_keys is None:
+        selected_keys = ["high-risk", "low-risk"]
 
-    # Create legend handles with alpha matching box plots
-    handles = []
-    for i, name in enumerate(policy_names):
-        color = get_policy_color(name, fallback_idx=i)
-        # Convert to RGBA with alpha
-        if isinstance(color, str) and color.startswith("#"):
-            rgb = mcolors.hex2color(color)
-            facecolor = (*rgb, alpha)
-        else:
-            facecolor = (*color[:3], alpha)
-        patch = mpatches.Patch(facecolor=facecolor, edgecolor=color, label=name)
-        handles.append(patch)
+    if score_filter is not None and median_score is None:
+        raise ValueError("median_score must be provided when score_filter is set")
 
-    # Determine layout
-    if ncol is None:
-        if orientation == "horizontal":
-            # Distribute items across nrows
-            ncol = (len(policy_names) + nrows - 1) // nrows  # Ceiling division
-        else:
-            ncol = 1
-
-    if figsize is None:
-        if orientation == "horizontal":
-            figsize = (min(len(policy_names) * 1.5, 10), 0.5 * nrows)
-        else:
-            figsize = (2, len(policy_names) * 0.3)
-
-    # Create figure with just the legend
-    fig, ax = plt.subplots(figsize=figsize)
-    ax.axis("off")
-
-    # Use global font with size 10 for legend
-    legend = ax.legend(
-        handles=handles,
-        loc="center",
-        ncol=ncol,
-        frameon=False,
-        columnspacing=columnspacing,
+    plt.rcParams.update(
+        {
+            "pgf.texsystem": "pdflatex",
+            "font.family": "serif",
+            "text.usetex": True,
+        }
     )
 
-    plt.tight_layout()
+    # Build the score function from risk table
+    risk_table = settings.dfi.groupby(["age_dist", "offenses"])["score_state"].mean()
+    r_a_dict = risk_table[:, 0].to_dict()
+    score_aj = lambda a, j: r_a_dict.get(a, 0) + 0.1884 * j
 
-    # Determine output format from extension
-    if output_path.endswith((".pgf", ".tex")):
-        # Save as PGF/TikZ for LaTeX
-        plt.savefig(output_path, bbox_inches="tight", backend="pgf")
-    else:
-        # Save as PDF or PNG
-        plt.savefig(output_path, bbox_inches="tight", dpi=150)
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111)
 
-    plt.show()
+    markers = ["o", "s", "^", "x", "D", "v", "<", ">"]
+    markevery = [0.1, 0.12, 0.14, 0.16, 0.18, 0.2, 0.22, 0.24]
 
-    print(f"Saved legend to {output_path}")
-    return fig
+    # First pass: collect all unique scores across all policies
+    all_scores = set()
+    all_data = {}
+
+    for i, policy_key in enumerate(selected_keys):
+        df_mean_raw, _ = compute_equilibrium_stats(
+            all_metrics[policy_key], metric_key=metric_key
+        )
+
+        score_pop = {}
+        for a in df_mean_raw.index:
+            for j in df_mean_raw.columns:
+                raw_score = score_aj(a, j)
+
+                # Apply score filter
+                if score_filter == "high" and raw_score < median_score:
+                    continue
+                elif score_filter == "low" and raw_score >= median_score:
+                    continue
+
+                pop = df_mean_raw.loc[a, j]
+                score = min(raw_score, score_cap)
+                if score in score_pop:
+                    score_pop[score] += pop
+                else:
+                    score_pop[score] = pop
+
+        all_scores.update(score_pop.keys())
+        all_data[policy_key] = score_pop
+
+    # Create score-to-rank mapping (evenly spaced x-axis)
+    sorted_all_scores = sorted(all_scores)
+    score_to_rank = {s: i for i, s in enumerate(sorted_all_scores)}
+
+    # Second pass: plot with rank-based x-axis
+    for i, policy_key in enumerate(selected_keys):
+        score_pop = all_data[policy_key]
+
+        sorted_scores = np.array(sorted(score_pop.keys()))
+        sorted_pops = np.array([score_pop[s] for s in sorted_scores])
+
+        cumsum_pops = np.cumsum(sorted_pops)
+        total_pop = cumsum_pops[-1]
+
+        x_ranks = np.array([score_to_rank[s] for s in sorted_scores])
+
+        color = get_policy_color(policy_key, fallback_idx=i)
+        linestyle = get_policy_linestyle(policy_key)
+
+        ax.plot(
+            x_ranks,
+            cumsum_pops / total_pop,
+            color=color,
+            linestyle=linestyle,
+            linewidth=3.5,
+            marker=markers[i % len(markers)],
+            markersize=10,
+            markevery=markevery[i % len(markevery)],
+            markerfacecolor="white",
+            markeredgecolor=color,
+            markeredgewidth=2.5,
+        )
+
+    # Set x-tick labels to show actual scores
+    n_ticks = min(10, len(sorted_all_scores))
+    tick_indices = np.linspace(0, len(sorted_all_scores) - 1, n_ticks, dtype=int)
+    ax.set_xticks(tick_indices)
+    ax.set_xticklabels(
+        [f"{sorted_all_scores[i]:.2f}" for i in tick_indices], fontsize=15
+    )
+
+    ax.set_xlabel("Score")
+    ax.set_ylabel("Cumulative Population")
+    ax.tick_params(axis="both", labelsize=15, width=2)
+    ax.grid(True, alpha=0.3, linewidth=1.5)
+
+    # Make spines bolder
+    for spine in ax.spines.values():
+        spine.set_linewidth(2)
+
+    fig.tight_layout()
+    if output_path:
+        fig.savefig(output_path)
+    if show:
+        plt.show()
+
+    return fig, ax
+
+
+def compute_metric_by_risk_group(
+    all_metrics,
+    settings,
+    median_score,
+    metric_key="x0",
+    selected_keys=None,
+):
+    """
+    Compute total metric values split by high-risk vs low-risk groups.
+
+    For each policy, sums the metric values for individuals with score below
+    (low-risk) or above/equal to (high-risk) the median score.
+
+    Args:
+        all_metrics: dict of policy_name -> metrics from read_metrics_from_h5
+        settings: SimulationSetup instance with dfi containing score_state
+        median_score: score threshold to split high-risk vs low-risk
+        metric_key: metric to compute (e.g., "x0", "yin", "lv", "tau", "inc")
+        selected_keys: list of policy names to compute (default: all keys in all_metrics)
+
+    Returns:
+        dict: {policy_name: {"low_risk": total_value, "high_risk": total_value}}
+    """
+    from simulation_stats import compute_equilibrium_stats
+
+    if selected_keys is None:
+        selected_keys = list(all_metrics.keys())
+
+    # Build the score function from risk table
+    risk_table = settings.dfi.groupby(["age_dist", "offenses"])["score_state"].mean()
+    r_a_dict = risk_table[:, 0].to_dict()
+    score_aj = lambda a, j: r_a_dict.get(a, 0) + 0.1884 * j
+
+    results = {}
+
+    for policy_key in selected_keys:
+        if policy_key not in all_metrics:
+            continue
+
+        df_mean_raw, _ = compute_equilibrium_stats(
+            all_metrics[policy_key], metric_key=metric_key
+        )
+
+        low_risk_total = 0.0
+        high_risk_total = 0.0
+
+        for a in df_mean_raw.index:
+            for j in df_mean_raw.columns:
+                val = df_mean_raw.loc[a, j]
+                score = score_aj(a, j)
+
+                if score < median_score:
+                    low_risk_total += val
+                else:
+                    high_risk_total += val
+
+        results[policy_key] = {
+            "low_risk": low_risk_total,
+            "high_risk": high_risk_total,
+        }
+
+    return results
+
+
+def plot_metric_by_risk_group(
+    all_metrics,
+    settings,
+    median_score,
+    metric_key="x0",
+    selected_keys=None,
+    output_path="/tmp/metric_risk_groups.pgf",
+    figsize=(8, 5),
+    show=True,
+):
+    """
+    Plot bar chart of metric values split by high-risk vs low-risk groups.
+
+    For each policy, shows two bars: one for low-risk (score < median) and
+    one for high-risk (score >= median).
+
+    Args:
+        all_metrics: dict of policy_name -> metrics from read_metrics_from_h5
+        settings: SimulationSetup instance with dfi containing score_state
+        median_score: score threshold to split high-risk vs low-risk
+        metric_key: metric to plot (e.g., "x0", "yin", "lv", "tau", "inc")
+        selected_keys: list of policy names to plot (default: all keys in all_metrics)
+        output_path: path to save figure (default: "/tmp/metric_risk_groups.pgf")
+        figsize: figure size tuple (default: (8, 5))
+        show: whether to call plt.show() (default: True)
+
+    Returns:
+        fig, ax: matplotlib figure and axes objects
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if selected_keys is None:
+        selected_keys = list(all_metrics.keys())
+
+    plt.rcParams.update(
+        {
+            "pgf.texsystem": "pdflatex",
+            "font.family": "serif",
+            "text.usetex": True,
+        }
+    )
+
+    # Compute the totals
+    results = compute_metric_by_risk_group(
+        all_metrics, settings, median_score, metric_key, selected_keys
+    )
+
+    # Prepare data for plotting
+    policies = [p for p in selected_keys if p in results]
+    low_risk_vals = [results[p]["low_risk"] for p in policies]
+    high_risk_vals = [results[p]["high_risk"] for p in policies]
+
+    x = np.arange(len(policies))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    bars_low = ax.bar(
+        x - width / 2,
+        low_risk_vals,
+        width,
+        label=f"Low-Risk (score $<$ {median_score:.2f})",
+        color="#4ECDC4",
+        edgecolor="black",
+        linewidth=1.5,
+    )
+    bars_high = ax.bar(
+        x + width / 2,
+        high_risk_vals,
+        width,
+        label=f"High-Risk (score $\\geq$ {median_score:.2f})",
+        color="#FF6B6B",
+        edgecolor="black",
+        linewidth=1.5,
+    )
+
+    ax.set_xlabel("Policy", fontsize=14)
+    ax.set_ylabel(metric_key, fontsize=14)
+    ax.set_title(f"{metric_key} by Risk Group", fontsize=16)
+    ax.set_xticks(x)
+    ax.set_xticklabels(policies, fontsize=12)
+    ax.tick_params(axis="both", labelsize=12, width=2)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3, linewidth=1.5, axis="y")
+
+    for spine in ax.spines.values():
+        spine.set_linewidth(2)
+
+    # Add value labels on bars
+    for bar in bars_low:
+        height = bar.get_height()
+        ax.annotate(
+            f"{height:.1f}",
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
+    for bar in bars_high:
+        height = bar.get_height()
+        ax.annotate(
+            f"{height:.1f}",
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
+
+    fig.tight_layout()
+    if output_path:
+        fig.savefig(output_path)
+    if show:
+        plt.show()
+
+    return fig, ax
