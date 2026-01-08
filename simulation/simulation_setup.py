@@ -46,6 +46,7 @@ class SimulationSetup:
 
         # Default values
         self.p_freeze = 2
+        self.p_freeze_policy = 10  # number of periods to run before updating the policy
         # @note: previously we use 400 x 40000 is quite stable.
         self.p_length = 100
         self.T_max = 40000
@@ -122,6 +123,7 @@ class SimulationSetup:
         print(f"  T_max:             {self.T_max:,} time units")
         print(f"  p_length:          {self.p_length} (episode length)")
         print(f"  p_freeze:          {self.p_freeze} (freeze period)")
+        print(f"  p_freeze_policy:   {self.p_freeze_policy} (policy freeze period)")
         print(f"  off_prob:          {self.rel_off_probation} (off-probation term)")
         print(f"  n_episodes:        ~{n_episodes}")
         print("-" * 60)
@@ -284,12 +286,12 @@ def create_threshj_lowa_prob_vector(j_min=2, a_max=2, j_max=20):
 pr_lowj_lowa = create_lowj_lowa_prob_vector()
 pr_threshj_lowa = create_threshj_lowa_prob_vector()
 thres_cutoff = {
-    1: 0,  # if in age-group 1, cut-off below 1
-    2: 1,  # if in age-group 2, cut-off below 2
-    3: 2,  # if in age-group 3, cut-off below 3
-    4: 3,
-    5: 6,
-    6: 10,
+    1: 4,  # if in age-group 1, cut-off below 1
+    2: 2,  # if in age-group 2, cut-off below 2
+    3: 1,  # if in age-group 3, cut-off below 3
+    4: 1,
+    5: 0,
+    6: 0,
 }
 
 
@@ -343,29 +345,32 @@ def get_tests(settings=None):
                 ascending=True,
                 effect=settings.treatment_effect,
                 to_compute=lambda df: df.apply(
-                    lambda row: (row["age"], -row["offenses"]), axis=1
+                    lambda row: (row["age"], -row["score_state"]), axis=1
                 ),
             ),
         ),
-        # "low-age-low-prev": (
-        #     smt.treatment_rule_priority,
-        #     dict(
-        #         key="_new_prior",
-        #         capacity=settings.treatment_capacity,
-        #         ascending=True,
-        #         effect=settings.treatment_effect,
-        #         to_compute=lambda df: df.apply(
-        #             lambda row: (row["age_dist"], row["offenses"]), axis=1
-        #         ),
-        #     ),
-        # ),
-        "high-risk-only-young": (
+        "low-risk-young-first": (
             smt.treatment_rule_priority,
             dict(
-                key="score",
+                key="_new_prior",
                 capacity=settings.treatment_capacity,
-                ascending=False,
-                exclude=lambda row: row["age_dist"] >= 3,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: (row["score"], row["age"]), axis=1
+                ),
+            ),
+        ),
+        "high-risk-young-first": (
+            smt.treatment_rule_priority,
+            dict(
+                key="_new_prior",
+                capacity=settings.treatment_capacity,
+                ascending=True,
+                effect=settings.treatment_effect,
+                to_compute=lambda df: df.apply(
+                    lambda row: (-row["score"], row["age"]), axis=1
+                ),
             ),
         ),
         "high-risk-cutoff": (

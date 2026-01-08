@@ -6,6 +6,10 @@ from lifelines import CoxPHFitter
 from lifelines.fitters import ParametricRegressionFitter
 from scipy.interpolate import interp1d
 from scipy.optimize import curve_fit
+import os
+
+TR_LOW = float(os.getenv("TR_LOW", "15.0"))
+TR_HIGH = float(os.getenv("TR_HIGH", "0.0"))
 
 
 # ------------------------------------------------------------------------------
@@ -41,7 +45,15 @@ def batch_treatment_rule(func):
         people_qualifying = dfi.query(str_qualifying)
         people_intreatment = dfi.query(str_current_enroll)
         remaining_capacity = capacity - people_intreatment["dosage"].sum()
-
+        print(
+            f"""
+    capacity: {capacity},
+    people_qualifying: {people_qualifying.shape[0]},
+    people_intreatment: {people_intreatment.shape[0]},
+    remaining_capacity: {remaining_capacity},
+    score_range: {people_qualifying["score"].min()} - {people_qualifying["score"].max()},
+"""
+        )
         if remaining_capacity <= 0:
             return []
 
@@ -100,6 +112,25 @@ def treatment_rule_priority(
 
     # Select where cumsum <= remaining_capacity
     mask = cumsum_dosages <= remaining_capacity
+
+    # Handle ties at the boundary: if there are tied scores at the cutoff,
+    # we must exclude all of them to avoid exceeding capacity
+    if mask.sum() > 0 and mask.sum() < len(mask):
+        # Get the score of the last included candidate
+        last_included_idx = mask.sum() - 1
+        last_included_score = sorted_candidates[key].iloc[last_included_idx]
+
+        # Check if there are ties with the first excluded candidate
+        first_excluded_score = sorted_candidates[key].iloc[last_included_idx + 1]
+
+        if last_included_score == first_excluded_score:
+            # Exclude all candidates with the tied score at the boundary
+            # Use element-wise comparison that handles tuple values correctly
+            tied_mask = sorted_candidates[key] == last_included_score
+            mask = mask & ~tied_mask.values
+    print(
+        f"candidates:\n{sorted_candidates.loc[mask, ['state', 'score', 'score_state', 'score_treatment']]}"
+    )
     return sorted_candidates.index[mask]
 
 
@@ -158,25 +189,27 @@ def treatment_rule_random(candidates, remaining_capacity, **kwargs):
 # ------------------------------------------------------------------------------
 # heterogeneous treatment effect functions
 # ------------------------------------------------------------------------------
-def treatment_effect_type_1(row, med=-0.3604):
+def treatment_effect_type_1(row, med=-0.3604, mt_high=TR_HIGH, mt_low=TR_LOW):
     """
     Heterogeneous treatment effect based on individual characteristics.
-
+        "higher score than current risk score, less treatment effect."
+        "H vs. L., baseline = -0.3425"
     Args:
         row: pandas Series representing an individual's data
 
     Returns:
         float: treatment effect value (0-1)
     """
-    # TODO: implement type-1 heterogeneous treatment effect logic
-    delta = row["score_state"] - med
-    return -0.3425 * min(2, np.exp(delta))
+    delta = row["score"] - med
+    highr = delta >= 0
+    mt = mt_high if highr else mt_low
+    return -0.3425 * mt
 
 
 def treatment_effect_type_2(row, med=-0.3604, mt_high=0.1, mt_low=6.0):
     """
     Heterogeneous treatment effect based on individual characteristics.
-      "lower score, less treatment effect."
+      "higher state score than the initial mean, less treatment effect."
     Args:
         row: pandas Series representing an individual's data
 
@@ -202,7 +235,7 @@ def treatment_effect_type_3(row, med=-0.3604, mt_high=0.1, mt_low=6.0):
         float: treatment effect value (0-1)
     """
     # TODO: implement type-1 heterogeneous treatment effect logic
-    delta = row["offenses"] - 3
+    delta = row["offenses"] - 1
     highr = delta >= 0
     mt = mt_high if highr else mt_low
     return -0.3425 * mt

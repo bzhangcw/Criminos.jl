@@ -86,6 +86,12 @@ def create_parser():
         help="Number of periods to freeze before updating scores",
     )
     sim_group.add_argument(
+        "--p_freeze_policy",
+        type=int,
+        default=default_settings.p_freeze_policy,
+        help="Number of periods to run before updating the policy",
+    )
+    sim_group.add_argument(
         "--rel_off_probation",
         type=int,
         default=default_settings.rel_off_probation,
@@ -224,6 +230,7 @@ def run_sim(
         T_max=settings.T_max,
         p_length=settings.p_length,
         p_freeze=settings.p_freeze,
+        p_freeze_policy=settings.p_freeze_policy,
         rel_off_probation=settings.rel_off_probation,
         treatment_effect=settings.treatment_effect,
         func_treatment=func_treatment,
@@ -305,6 +312,7 @@ if __name__ == "__main__":
     settings.T_max = args.T_max
     settings.p_length = args.p_length
     settings.p_freeze = args.p_freeze
+    settings.p_freeze_policy = args.p_freeze_policy
     settings.rel_off_probation = args.rel_off_probation
     settings.beta_arrival = args.beta_arrival
     settings.beta_initial = args.beta_initial

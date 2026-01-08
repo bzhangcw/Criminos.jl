@@ -18,13 +18,25 @@ results_dir = sys.argv[1]
 metrics = [
     "offense_rate",
     "incarceration_rate",
+    "total_population",
+    "total_offenses",
+    "total_departures",
+    "total_offenses/total_population",
+    "total_departures/total_population",
 ]
 # policies = ["null", "high-risk", "low-risk", "age-first", "age-first-high-risk"]
 # policies = ["null", "high-risk", "low-risk", "age-first-high-risk"]
-policies = ["null", "high-risk", "low-risk", "age-first"]
+policies = [
+    "null",
+    "high-risk",
+    "low-risk",
+    "age-first",
+    # "age-first-high-risk",
+    # "high-risk-young-first",
+]
 summary_wd_last = 20  # Window size for computing equilibrium (last N periods)
 summary_wd_first = 40  # Window size for computing first N periods
-summary_wd_start = 80
+summary_wd_start = 40
 
 print("=" * 60)
 print("Running Prison Scale Factor Sensitivity Analysis")
@@ -67,7 +79,9 @@ def run_analysis_and_plot(summary_wd: int, use_first: bool, suffix: str):
 
     # Save each metric to a separate CSV file
     for metric, df in dfs.items():
-        filename = os.path.join(output_dir, f"sensitivity_{metric}.csv")
+        # Sanitize metric name for filename (replace / with _per_)
+        metric_filename = metric.replace("/", "_per_")
+        filename = os.path.join(output_dir, f"sensitivity_{metric_filename}.csv")
         df.to_csv(filename)
         print(f"Saved {filename} (shape: {df.shape})")
 

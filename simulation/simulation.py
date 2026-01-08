@@ -31,6 +31,25 @@ from scipy.interpolate import interp1d
 
 import sirakaya
 from tqdm.auto import tqdm as _tqdm
+import time
+
+
+class TimerContext:
+    """A simple context manager for timing code blocks."""
+
+    def __init__(self, name="", verbose=True):
+        self.name = name
+        self.verbose = verbose
+        self.elapsed = 0.0
+
+    def __enter__(self):
+        self.start = time.perf_counter()
+        return self
+
+    def __exit__(self, *args):
+        self.elapsed = time.perf_counter() - self.start
+        if self.verbose:
+            print(f"[{self.name}] elapsed: {self.elapsed:.4f}s")
 
 
 class EventType(str, Enum):
@@ -260,6 +279,7 @@ class Simulator(object):
         "bool_treat_made",  # whether the treatment decision (either 0 or 1) has been made
         "ep_arrival",  # episode of arrival
         "ep_leaving",  # episode of leaving
+        "ep_return",  # episode of most recent return (EVENT_RETURN)
         "return_times",  # number of times the individual has returned to the community
     ]
 
@@ -371,7 +391,8 @@ class Simulator(object):
         opt_verbosity=2,
         T_max=1095,
         p_length=360,
-        p_freeze=4,
+        p_freeze=4,  # number of periods to run before updating the community score
+        p_freeze_policy=10,  # number of periods to run before updating the policy
         rel_off_probation=500,
         # ----------------------------------------------------------------------
         treatment_effect=None,
@@ -465,6 +486,7 @@ class Simulator(object):
         dfi["rel_off_probation"] = rel_off_probation  # initial off-probation term
         dfi["ep_leaving"] = 1e6
         dfi["ep_end_probation"] = 1e6
+        dfi["ep_return"] = 1e6
         dfi["age_start"] = dfi["age"].copy()
         dfi["age_dist_start"] = dfi["age_dist"].copy()
         dfi["prio_offenses"] = dfi["offenses"].copy()
@@ -593,222 +615,226 @@ class Simulator(object):
             _pbar.update(int(_inc))
             _episode = np.floor(t / p_length).astype(int)
             _bool_skip_next_offense = False
+            with TimerContext("event_processing", verbose=(opt_verbosity >= 4)):
+                if info in (EventType.EVENT_ARR, EventType.EVENT_RETURN):
+                    # new arrival and add to the population
+                    if info == EventType.EVENT_ARR:
+                        n_persons_appeared += 1
+                        person_id_max += 1
+                        # Batch copy row data
+                        dfi.loc[idx] = dfpop.loc[event.idx_ref]
+                        # Batch assign multiple columns at once
+                        age_val = dfi.at[idx, "age"]
+                        age_dist_val = dfi.at[idx, "age_dist"]
+                        offenses_val = dfi.at[idx, "offenses"]
 
-            if info in (EventType.EVENT_ARR, EventType.EVENT_RETURN):
-                # new arrival and add to the population
-                if info == EventType.EVENT_ARR:
-                    n_persons_appeared += 1
-                    person_id_max += 1
-                    # Batch copy row data
-                    dfi.loc[idx] = dfpop.loc[event.idx_ref]
-                    # Batch assign multiple columns at once
-                    age_val = dfi.at[idx, "age"]
-                    age_dist_val = dfi.at[idx, "age_dist"]
-                    offenses_val = dfi.at[idx, "offenses"]
+                        # Use .at for single value assignments (faster than .loc)
+                        dfi.at[idx, "bool_can_be_treated"] = 1
+                        dfi.at[idx, "age_start"] = age_val
+                        dfi.at[idx, "age_dist_start"] = age_dist_val
+                        dfi.at[idx, "prio_offenses"] = offenses_val
+                        dfi.at[idx, "has_been_treated"] = 0
+                        dfi.at[idx, "score_has_been_treated"] = 0.0
+                        # Batch assign initialized columns
+                        dfi.loc[idx, self.INITIALIZED_COLUMNS] = 0
+                    else:
+                        # return can be treated?
+                        dfi.at[idx, "bool_can_be_treated"] = bool_return_can_be_treated
 
-                    # Use .at for single value assignments (faster than .loc)
-                    dfi.at[idx, "bool_can_be_treated"] = 1
-                    dfi.at[idx, "age_start"] = age_val
-                    dfi.at[idx, "age_dist_start"] = age_dist_val
-                    dfi.at[idx, "prio_offenses"] = offenses_val
-                    dfi.at[idx, "has_been_treated"] = 0
-                    dfi.at[idx, "score_has_been_treated"] = 0.0
-                    # Batch assign initialized columns
-                    dfi.loc[idx, self.INITIALIZED_COLUMNS] = 0
+                    # Batch assign common columns
+                    dfi.at[idx, "arrival"] = t
+                    dfi.at[idx, "ep_arrival"] = _episode
+                    dfi.at[idx, "stage"] = "p"
+                    dfi.at[idx, "score_stage"] = 1.0  # 1.0 for probation stage
+
+                    # arrival / return, then start probation immediately
+                    # add a perturbation to the leaving time
+                    perturbation = np.random.uniform(0.7, 1.3) * length_scaler
+                    dfi.at[idx, "rel_probation"] = (
+                        dfi.at[idx, "rel_probation"] * perturbation
+                    )
+                    dfi.at[idx, "rel_off_probation"] = rel_off_probation * length_scaler
+
+                    # Cache row for multiple accesses
+                    row_data = dfi.loc[idx]
+
+                    # update the state and scores
+                    state_val = self.state_defs.get_state(row_data)
+                    dfi.at[idx, "state"] = state_val
+                    dfi.at[idx, "state_lst"] = StateVal(state_val.value)
+                    dfi.at[idx, "score_state"] = self.state_defs.get_score(row_data)
+                    dfi.at[idx, "score_comm"] = dfc_dict.get(row_data["code_county"])
+                    dfi.at[idx, "score"] = self.produce_score(idx, dfi)
+                    dfi.at[idx, "dosage"] = func_dosage(idx, dfi)
+
+                    # ------------------------------------------------------------
+                    # produce the end-probation event
+                    # ------------------------------------------------------------
+                    _end_probation = self.func_end_probation(row_data, t)
+                    opt_verbosity >= 2 and print(
+                        self.log_event(_end_probation, gen=True), file=fo
+                    )
+                    event_queue.put((_end_probation.priority, _end_probation))
+                    dfi.at[idx, "end_probation"] = _end_probation.time
+                    dfi.at[idx, "ep_end_probation"] = 1e6
+                    # ------------------------------------------------------------
+                    # produce the leaving event
+                    # ------------------------------------------------------------
+                    _leaving = self.func_leaving(row_data, t)
+                    opt_verbosity >= 2 and print(
+                        self.log_event(_leaving, gen=True), file=fo
+                    )
+                    event_queue.put((_leaving.priority, _leaving))
+                    dfi.at[idx, "leaving"] = _leaving.time
+                    dfi.at[idx, "ep_leaving"] = 1e6
+                    dfi.at[idx, "hash_leave"] = _leaving.hashid
+
+                    # generate next arrival individual
+                    if info == EventType.EVENT_ARR:
+                        _new_row = dfpop.sample(1, weights="weight").iloc[0]
+
+                        _arrival = self.func_arrival(
+                            _new_row,
+                            t,
+                            person_id_max + 1,
+                            _new_row.name,
+                        )
+                        if _arrival is not None:
+                            opt_verbosity >= 2 and print(
+                                self.log_event(_arrival, gen=True), file=fo
+                            )
+                            event_queue.put((_arrival.priority, _arrival))
+
+                            num_lbd[
+                                _row["code_county"], dfi.loc[idx, "state"], _episode
+                            ] += 1
+
+                elif info == EventType.EVENT_END_PROD:
+                    # process leaving events
+                    dfi.at[idx, "ep_end_probation"] = _episode
+                    dfi.at[idx, "stage"] = "f"
+                    dfi.at[idx, "score_stage"] = 0.0  # 0.0 for off-probation stage
+                    _revoke_event = revert_treatment(dfi, idx, t)
+                    if _revoke_event is not None:
+                        opt_verbosity >= 2 and print(
+                            self.log_event(_revoke_event, gen=False), file=fo
+                        )
+
+                elif info == EventType.EVENT_LEAVE:
+                    # process leaving events
+                    dfi.at[idx, "bool_left"] = _bool_skip_next_offense = 1
+                    dfi.at[idx, "ep_leaving"] = _episode
+                    dfi.at[idx, "type_left"] = ReasonToLeave.END_OF_PROCESS
+                    num_lft[_row["code_county"], _row["state"], _episode] += 1
+
+                elif info == EventType.EVENT_INCARCERATION:
+                    # process incarceration events
+                    dfi.at[idx, "bool_left"] = _bool_skip_next_offense = 1
+                    dfi.at[idx, "ep_leaving"] = _episode
+                    dfi.at[idx, "type_left"] = ReasonToLeave.INCARCERATION
+                    num_lft[_row["code_county"], _row["state"], _episode] += 1
+
+                elif info == EventType.EVENT_RECID:
+                    _row = dfi.loc[idx]
+                    # ------------------------------------------------------------
+                    dfi.at[idx, "observed"] = 1
+                    dfi.at[idx, "ep_lastre"] = _episode
+                    dfi.at[idx, "acc_survival"] = dfi.at[idx, "acc_survival"] + tau
+
+                    # Cache frequently accessed values
+                    code_county = _row["code_county"]
+                    state = _row["state"]
+
+                    # accumulate the number of arrests
+                    num_n_y[code_county] += 1
+                    num_n_time[code_county] += tau
+
+                    # per-episode number of arrests
+                    num_y[code_county, state, _episode] += 1
+                    current_offenses = dfi.at[idx, "offenses"] + 1
+                    if current_offenses > max_offenses:
+                        current_offenses = max_offenses
+                    dfi.at[idx, "offenses"] = current_offenses
+
+                    # ------------------------------------------------------------
+                    # an incarceration event?
+                    # ------------------------------------------------------------
+                    stage = dfi.at[idx, "stage"]
+                    _bool_off_probation = stage == "f"
+                    prison_rate = dfi.at[idx, "prison_rate"]
+                    _bool_is_incarceration_event = (prison_rate > 0) and (
+                        np.random.uniform(0, 1) < prison_rate * prison_rate_scaler
+                    )
+                    _bool_off_probation_and_returned_too_many_times = (
+                        _bool_off_probation
+                        and dfi.at[idx, "return_times"] >= max_returns
+                    )
+                    _bool_should_be_incarcerated = (
+                        _bool_is_incarceration_event
+                        or _bool_off_probation_and_returned_too_many_times
+                    )
+                    if _bool_should_be_incarcerated and bool_has_incarceration:
+                        _incarceration = self.__default_incarceration(dfi.loc[idx], t)
+                        opt_verbosity >= 2 and print(
+                            self.log_event(_incarceration, gen=True), file=fo
+                        )
+                        event_queue.put((_incarceration.priority, _incarceration))
+                        # cancel prescheduled leaving event
+                        self.events_cancelled[dfi.loc[idx, "hash_leave"]] = (
+                            _incarceration.hashid
+                        )
+                        self.events_cancelled[dfi.loc[idx, "hash_end_probation"]] = (
+                            _incarceration.hashid
+                        )
+                        _bool_skip_next_offense = True
+                        _revoke_event = revert_treatment(dfi, idx, t)
+                        if _revoke_event is not None:
+                            opt_verbosity >= 2 and print(
+                                self.log_event(_revoke_event, gen=False), file=fo
+                            )
+
+                    elif _bool_off_probation:
+                        # this person is returning to the community (again)
+                        dfi.at[idx, "return_times"] = dfi.at[idx, "return_times"] + 1
+                        dfi.at[idx, "ep_return"] = _episode
+                        _return = self.__default_return(_row, t)
+                        opt_verbosity >= 2 and print(
+                            self.log_event(_return, gen=False), file=fo
+                        )
+                        event_queue.put((_return.priority, _return))
+
+                        # cancel prescheduled leaving event
+                        self.events_cancelled[dfi.at[idx, "hash_leave"]] = (
+                            _return.hashid
+                        )
+                        _bool_skip_next_offense = True
+                        _revoke_event = revert_treatment(dfi, idx, t)
+                        if _revoke_event is not None:
+                            opt_verbosity >= 2 and print(
+                                self.log_event(_revoke_event, gen=False), file=fo
+                            )
+
                 else:
-                    # return can be treated?
-                    dfi.at[idx, "bool_can_be_treated"] = bool_return_can_be_treated
-
-                # Batch assign common columns
-                dfi.at[idx, "arrival"] = t
-                dfi.at[idx, "ep_arrival"] = _episode
-                dfi.at[idx, "stage"] = "p"
-                dfi.at[idx, "score_stage"] = 1.0  # 1.0 for probation stage
-
-                # arrival / return, then start probation immediately
-                # add a perturbation to the leaving time
-                perturbation = np.random.uniform(0.7, 1.3) * length_scaler
-                dfi.at[idx, "rel_probation"] = (
-                    dfi.at[idx, "rel_probation"] * perturbation
-                )
-                dfi.at[idx, "rel_off_probation"] = rel_off_probation * length_scaler
-
-                # Cache row for multiple accesses
-                row_data = dfi.loc[idx]
-
-                # update the state and scores
-                state_val = self.state_defs.get_state(row_data)
-                dfi.at[idx, "state"] = state_val
-                dfi.at[idx, "state_lst"] = StateVal(state_val.value)
-                dfi.at[idx, "score_state"] = self.state_defs.get_score(row_data)
-                dfi.at[idx, "score_comm"] = dfc_dict.get(row_data["code_county"])
-                dfi.at[idx, "score"] = self.produce_score(idx, dfi)
-                dfi.at[idx, "dosage"] = func_dosage(idx, dfi)
+                    raise ValueError(f"Unknown event type: {info}")
 
                 # ------------------------------------------------------------
-                # produce the end-probation event
+                # sample next survival time
                 # ------------------------------------------------------------
-                _end_probation = self.func_end_probation(row_data, t)
-                opt_verbosity >= 2 and print(
-                    self.log_event(_end_probation, gen=True), file=fo
-                )
-                event_queue.put((_end_probation.priority, _end_probation))
-                dfi.at[idx, "end_probation"] = _end_probation.time
-                dfi.at[idx, "ep_end_probation"] = 1e6
-                # ------------------------------------------------------------
-                # produce the leaving event
-                # ------------------------------------------------------------
-                _leaving = self.func_leaving(row_data, t)
-                opt_verbosity >= 2 and print(
-                    self.log_event(_leaving, gen=True), file=fo
-                )
-                event_queue.put((_leaving.priority, _leaving))
-                dfi.at[idx, "leaving"] = _leaving.time
-                dfi.at[idx, "ep_leaving"] = 1e6
-                dfi.at[idx, "hash_leave"] = _leaving.hashid
+                if _bool_skip_next_offense:
+                    # does not seem necessary to drop the individual
+                    # dfi.drop(index=idx, inplace=True)
+                    pass
 
-                # generate next arrival individual
-                if info == EventType.EVENT_ARR:
-                    _new_row = dfpop.sample(1, weights="weight").iloc[0]
-
-                    _arrival = self.func_arrival(
-                        _new_row,
-                        t,
-                        person_id_max + 1,
-                        _new_row.name,
+                elif info in (
+                    EventType.EVENT_ARR,
+                    EventType.EVENT_RECID,
+                    EventType.EVENT_RETURN,
+                ):
+                    _new_event = self.get_new_recid_event(
+                        dfi.loc[idx], t_now=t, opt_verbosity=opt_verbosity, fo=fo
                     )
-                    if _arrival is not None:
-                        opt_verbosity >= 2 and print(
-                            self.log_event(_arrival, gen=True), file=fo
-                        )
-                        event_queue.put((_arrival.priority, _arrival))
-
-                        num_lbd[
-                            _row["code_county"], dfi.loc[idx, "state"], _episode
-                        ] += 1
-
-            elif info == EventType.EVENT_END_PROD:
-                # process leaving events
-                dfi.at[idx, "ep_end_probation"] = _episode
-                dfi.at[idx, "stage"] = "f"
-                dfi.at[idx, "score_stage"] = 0.0  # 0.0 for off-probation stage
-                _revoke_event = revert_treatment(dfi, idx, t)
-                if _revoke_event is not None:
-                    opt_verbosity >= 2 and print(
-                        self.log_event(_revoke_event, gen=False), file=fo
-                    )
-
-            elif info == EventType.EVENT_LEAVE:
-                # process leaving events
-                dfi.at[idx, "bool_left"] = _bool_skip_next_offense = 1
-                dfi.at[idx, "ep_leaving"] = _episode
-                dfi.at[idx, "type_left"] = ReasonToLeave.END_OF_PROCESS
-                num_lft[_row["code_county"], _row["state"], _episode] += 1
-
-            elif info == EventType.EVENT_INCARCERATION:
-                # process incarceration events
-                dfi.at[idx, "bool_left"] = _bool_skip_next_offense = 1
-                dfi.at[idx, "ep_leaving"] = _episode
-                dfi.at[idx, "type_left"] = ReasonToLeave.INCARCERATION
-                num_lft[_row["code_county"], _row["state"], _episode] += 1
-
-            elif info == EventType.EVENT_RECID:
-                _row = dfi.loc[idx]
-                # ------------------------------------------------------------
-                dfi.at[idx, "observed"] = 1
-                dfi.at[idx, "ep_lastre"] = _episode
-                dfi.at[idx, "acc_survival"] = dfi.at[idx, "acc_survival"] + tau
-
-                # Cache frequently accessed values
-                code_county = _row["code_county"]
-                state = _row["state"]
-
-                # accumulate the number of arrests
-                num_n_y[code_county] += 1
-                num_n_time[code_county] += tau
-
-                # per-episode number of arrests
-                num_y[code_county, state, _episode] += 1
-                current_offenses = dfi.at[idx, "offenses"] + 1
-                if current_offenses > max_offenses:
-                    current_offenses = max_offenses
-                dfi.at[idx, "offenses"] = current_offenses
-
-                # ------------------------------------------------------------
-                # an incarceration event?
-                # ------------------------------------------------------------
-                stage = dfi.at[idx, "stage"]
-                _bool_off_probation = stage == "f"
-                prison_rate = dfi.at[idx, "prison_rate"]
-                _bool_is_incarceration_event = (prison_rate > 0) and (
-                    np.random.uniform(0, 1) < prison_rate * prison_rate_scaler
-                )
-                _bool_off_probation_and_returned_too_many_times = (
-                    _bool_off_probation and dfi.at[idx, "return_times"] >= max_returns
-                )
-                _bool_should_be_incarcerated = (
-                    _bool_is_incarceration_event
-                    or _bool_off_probation_and_returned_too_many_times
-                )
-                if _bool_should_be_incarcerated and bool_has_incarceration:
-                    _incarceration = self.__default_incarceration(dfi.loc[idx], t)
-                    opt_verbosity >= 2 and print(
-                        self.log_event(_incarceration, gen=True), file=fo
-                    )
-                    event_queue.put((_incarceration.priority, _incarceration))
-                    # cancel prescheduled leaving event
-                    self.events_cancelled[dfi.loc[idx, "hash_leave"]] = (
-                        _incarceration.hashid
-                    )
-                    self.events_cancelled[dfi.loc[idx, "hash_end_probation"]] = (
-                        _incarceration.hashid
-                    )
-                    _bool_skip_next_offense = True
-                    _revoke_event = revert_treatment(dfi, idx, t)
-                    if _revoke_event is not None:
-                        opt_verbosity >= 2 and print(
-                            self.log_event(_revoke_event, gen=False), file=fo
-                        )
-
-                elif _bool_off_probation:
-                    # this person is returning to the community (again)
-                    dfi.at[idx, "return_times"] = dfi.at[idx, "return_times"] + 1
-                    _return = self.__default_return(_row, t)
-                    opt_verbosity >= 2 and print(
-                        self.log_event(_return, gen=False), file=fo
-                    )
-                    event_queue.put((_return.priority, _return))
-
-                    # cancel prescheduled leaving event
-                    self.events_cancelled[dfi.at[idx, "hash_leave"]] = _return.hashid
-                    _bool_skip_next_offense = True
-                    _revoke_event = revert_treatment(dfi, idx, t)
-                    if _revoke_event is not None:
-                        opt_verbosity >= 2 and print(
-                            self.log_event(_revoke_event, gen=False), file=fo
-                        )
-
-            else:
-                raise ValueError(f"Unknown event type: {info}")
-
-            # ------------------------------------------------------------
-            # sample next survival time
-            # ------------------------------------------------------------
-            if _bool_skip_next_offense:
-                # does not seem necessary to drop the individual
-                # dfi.drop(index=idx, inplace=True)
-                pass
-
-            elif info in (
-                EventType.EVENT_ARR,
-                EventType.EVENT_RECID,
-                EventType.EVENT_RETURN,
-            ):
-                _new_event = self.get_new_recid_event(
-                    dfi.loc[idx], t_now=t, opt_verbosity=opt_verbosity, fo=fo
-                )
-                if _new_event is not None:
-                    event_queue.put((_new_event.priority, _new_event))
+                    if _new_event is not None:
+                        event_queue.put((_new_event.priority, _new_event))
 
             # ------------------------------------------------------------
             # update the community score;
@@ -818,113 +844,146 @@ class Simulator(object):
             # if episode is upgraded;
             #  then update the score of the community
             if _episode > p:
-                opt_verbosity >= 1 and print(
-                    f"event:happ/\t{_episode}: update community score", file=fo
-                )
-                for _cid in id_cc:
-                    # computation of the percentage of re-arrested people
-                    # this means the fraction of people who have been arrested at least once
-                    # during the probation period
-                    # @note: old method, not so accurate?
-                    #   dfc.loc[_cid, "percent_re"]
-                    #       = num_n_mu[_cid, _episode] = num_n_y[_cid] / (num_n_x[_cid] * _episode)
-                    # @note: new method
-                    #   compute the rate of re-arrested people
-                    #   ever appeared in the county
-                    _sum_observed = (
-                        dfi.groupby("code_county")
-                        .agg(
-                            {
-                                "score_fixed": "count",  # use this only to count total # of individuals
-                                "observed": "sum",
-                            }
+                with TimerContext(
+                    "update_community_score", verbose=(opt_verbosity >= 4)
+                ):
+                    opt_verbosity >= 1 and print(
+                        f"event:happ/\t{_episode}: update community score", file=fo
+                    )
+                    for _cid in id_cc:
+                        # computation of the percentage of re-arrested people
+                        # this means the fraction of people who have been arrested at least once
+                        # during the probation period
+                        # @note: old method, not so accurate?
+                        #   dfc.loc[_cid, "percent_re"]
+                        #       = num_n_mu[_cid, _episode] = num_n_y[_cid] / (num_n_x[_cid] * _episode)
+                        # @note: new method
+                        #   compute the rate of re-arrested people
+                        #   ever appeared in the county
+                        _sum_observed = (
+                            dfi.groupby("code_county")
+                            .agg(
+                                {
+                                    "score_fixed": "count",  # use this only to count total # of individuals
+                                    "observed": "sum",
+                                }
+                            )
+                            .assign(rate=lambda x: x["observed"] / x["score_fixed"])
                         )
-                        .assign(rate=lambda x: x["observed"] / x["score_fixed"])
-                    )
-                    dfc.loc[_cid, "percent_re"] = num_n_mu[_cid, _episode] = (
-                        _sum_observed.loc[_cid, "rate"]
-                    )
+                        dfc.loc[_cid, "percent_re"] = num_n_mu[_cid, _episode] = (
+                            _sum_observed.loc[_cid, "rate"]
+                        )
 
-                    # computation of the mean re-arrest time
-                    # for each cid, just accumulate the time and the number of arrests
-                    # mean_re_time = (accummulated) total_time / (number_of_offensess + 1e-10)
-                    dfc.loc[_cid, "mean_re_time"] = num_n_mean_offenses[
-                        _cid, _episode
-                    ] = num_n_time[_cid] / (num_n_y[_cid] + 1e-10)
+                        # computation of the mean re-arrest time
+                        # for each cid, just accumulate the time and the number of arrests
+                        # mean_re_time = (accummulated) total_time / (number_of_offensess + 1e-10)
+                        dfc.loc[_cid, "mean_re_time"] = num_n_mean_offenses[
+                            _cid, _episode
+                        ] = num_n_time[_cid] / (num_n_y[_cid] + 1e-10)
 
-                # re-calculate score for the community
-                dfc["score_comm"] = dfc.apply(
-                    lambda row: self.eval_score_comm(row), axis=1
-                )
-                dfc_dict = dfc["score_comm"].to_dict()
+                    # re-calculate score for the community
+                    dfc["score_comm"] = dfc.apply(
+                        lambda row: self.eval_score_comm(row), axis=1
+                    )
+                    dfc_dict = dfc["score_comm"].to_dict()
 
                 # ------------------------------------------------------------------------------
                 # synchronize the individual score and state with the community score
                 # ------------------------------------------------------------------------------
                 # keep the last state if leave not earlier than the current episode
-                _idx_not_before = dfi["ep_leaving"] >= p
-                dfi.loc[_idx_not_before, "state_lst"] = dfi.loc[
-                    _idx_not_before, "state"
-                ].apply(lambda x: StateVal(x.value))
-                # update state and state score.
-                for idx in dfi[_idx_not_before].index:
-                    self.state_defs.update_state(dfi, idx, t)
-                    dfi.at[idx, "dosage"] = func_dosage(idx, dfi)
+                with TimerContext("update_state", verbose=(opt_verbosity >= 2)):
+                    # people who left larger than the current episode
+                    _idx_not_before = dfi["ep_leaving"] >= p
+                    # to individuals who did not leave yet
+                    _idx_staying = dfi["bool_left"] == 0
+                    _idx_update_state = _idx_staying & _idx_not_before
 
-                # we have a chance to lose track of the individuals
-                # TODO: to-be added.
+                    # ------------------------------------------------------------------------------
+                    # keep the last state if leave not earlier than the current episode
+                    # ------------------------------------------------------------------------------
+                    dfi.loc[_idx_not_before, "state_lst"] = dfi.loc[
+                        _idx_not_before, "state"
+                    ].apply(lambda x: StateVal(x.value))
 
-                # update the community score
-                # to individuals who did not leave yet
-                _idx_staying = dfi["bool_left"] != 0
+                    # ------------------------------------------------------------------------------
+                    # chance to lose track of the individuals?
+                    # ------------------------------------------------------------------------------
+                    # TODO: to-be added.
+                    # dfi.loc[_idx_staying, "bool_lost"] = ??
 
-                dfi.loc[_idx_staying, "score_comm"] = dfi.loc[
-                    _idx_staying, "code_county"
-                ].map(dfc_dict)
-                # dfi.loc[_idx_staying, "bool_lost"] =
+                    # ------------------------------------------------------------------------------
+                    # update the community score
+                    # ------------------------------------------------------------------------------
+                    dfi.loc[_idx_staying, "score_comm"] = dfi.loc[
+                        _idx_staying, "code_county"
+                    ].map(dfc_dict)
 
-                # produce the score
-                dfi.loc[_idx_staying, "score"] = self.produce_score(_idx_staying, dfi)
+                    # update state and state score.
+                    for idx in dfi[_idx_update_state].index:
+                        self.state_defs.update_state(dfi, idx, t)
+                        dfi.at[idx, "dosage"] = func_dosage(idx, dfi)
+
+                    # produce the score
+                    dfi.loc[_idx_update_state, "score"] = self.produce_score(
+                        _idx_update_state, dfi
+                    )
 
                 # ------------------------------------------------------------------------------
                 # apply treatment rule
                 # @note: this make the score_treatment column to be non-zero
                 # ------------------------------------------------------------------------------
-                idx_selected = func_treatment(
-                    dfi,
-                    # @note: by c.z (2025-09-10)
-                    # actually not needed because we will mark the decision as made;
-                    # will not be able to enter the pool again...
-                    str_qualifying=str_qualifying_for_treatment,
-                    str_current_enroll=str_current_enroll,
-                    **func_treatment_kwargs,
-                    t=t,
-                )
-                # Apply treatment effect to scores
-                # Since S(t|score) = S0(t)^exp(score) and higher score means more dangerous:
-                # - Higher score → exp(score) larger → S(t) smaller (since 0<S0<1) → higher offense
-                # To reduce offense, we need to lower the score:
-                # If treatment_effect = 0.5: score + log(0.5) = score - 0.693
-                # → Lower score → Higher survival → Lower offense ✓
-                dfi["bool_treat_made"] = 1
-                _global_median_score = dfi.loc[idx_selected, "score_state"].median()
-                for idx in idx_selected:
-                    _admit_event = admit_treatment(
-                        dfi, idx, t, treatment_effect, med=_global_median_score
-                    )
-                    # and we have to update the state again and score for these people
-                    self.state_defs.update_state(dfi, idx, t)
-                    dfi.loc[idx, "score"] = self.produce_score(idx, dfi)
-                    opt_verbosity >= 2 and print(
-                        self.log_event(_admit_event, gen=False),
-                        file=fo,
-                    )
+                with TimerContext("treatment_selection", verbose=(opt_verbosity >= 4)):
+                    if _episode > p_freeze_policy:
+                        people_qualifying = dfi.query(str_qualifying_for_treatment)
+                        idx_selected = func_treatment(
+                            dfi,
+                            # @note: by c.z (2025-09-10)
+                            # actually not needed because we will mark the decision as made;
+                            # will not be able to enter the pool again...
+                            str_qualifying=str_qualifying_for_treatment,
+                            str_current_enroll=str_current_enroll,
+                            **func_treatment_kwargs,
+                            t=t,
+                        )
+                        # Apply treatment effect to scores
+                        # Since S(t|score) = S0(t)^exp(score) and higher score means more dangerous:
+                        # - Higher score → exp(score) larger → S(t) smaller (since 0<S0<1) → higher offense
+                        # To reduce offense, we need to lower the score:
+                        # If treatment_effect = 0.5: score + log(0.5) = score - 0.693
+                        # → Lower score → Higher survival → Lower offense ✓
+                        dfi["bool_treat_made"] = 1
+                        # @median defined as people selected?
+                        # _global_median_score = dfi.loc[idx_selected, "score"].median()
+                        _global_median_score = people_qualifying["score"].median()
+                        # now defined as people qualified
+                        _before_score_sum = dfi.loc[idx_selected, "score"].sum()
 
-                current_enrollment = dfi.query(str_current_enroll).shape[0]
-                self.num_n_enrollment = {
-                    p: current_enrollment,
-                    **self.num_n_enrollment,
-                }
+                        for idx in idx_selected:
+                            _admit_event = admit_treatment(
+                                dfi, idx, t, treatment_effect, med=_global_median_score
+                            )
+                            # and we have to update the state again and score for these people
+                            self.state_defs.update_state(dfi, idx, t)
+                            dfi.loc[idx, "score"] = self.produce_score(idx, dfi)
+                            opt_verbosity >= 2 and print(
+                                self.log_event(_admit_event, gen=False),
+                                file=fo,
+                            )
+                        print(
+                            dfi.loc[
+                                idx_selected,
+                                ["state", "score", "score_state", "score_treatment"],
+                            ]
+                        )
+                        current_enrollment = dfi.query(str_current_enroll).shape[0]
+                        self.num_n_enrollment = {
+                            p: current_enrollment,
+                            **self.num_n_enrollment,
+                        }
+                        _after_score_sum = dfi.loc[idx_selected, "score"].sum()
+                        print(
+                            f"episode: {_episode}, idx_selected: {len(idx_selected)}, total_score: {_before_score_sum} -> {_after_score_sum}"
+                        )
 
                 if self.bool_keep_full_trajectory:
                     # keep trajectory
@@ -932,11 +991,12 @@ class Simulator(object):
                     dfi_sorted = dfi.assign(snap=p).reset_index()
                     t_dfc.append(dfc_sorted)
                     t_dfi.append(dfi_sorted.reindex(sorted(dfi_sorted.columns), axis=1))
-                    t_dftau.append(
-                        dfi.loc[idx_selected, sorted(dfi.columns)]
-                        .assign(snap=p)
-                        .reset_index()
-                    )
+                    if _episode > p_freeze_policy:
+                        t_dftau.append(
+                            dfi.loc[idx_selected, sorted(dfi.columns)]
+                            .assign(snap=p)
+                            .reset_index()
+                        )
 
                 p = _episode
 

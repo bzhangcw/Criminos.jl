@@ -183,18 +183,40 @@ def analyze_sensitivity(
                     # Compute statistics for each metric
                     for metric in metrics:
                         try:
-                            # Compute values (sum over summary_wd periods)
-                            policy_vals = compute_equilibrium_value(
-                                policy_metrics,
-                                metric,
-                                summary_wd,
-                                use_first,
-                                start_from,
-                            )
-
-                            # Compute absolute statistics (averaged per period)
-                            # Divide by summary_wd to get per-period average
-                            policy_vals_per_period = policy_vals / summary_wd
+                            # Check if this is a computed metric (e.g., "total_offenses/total_population")
+                            if "/" in metric:
+                                # Parse numerator and denominator
+                                numerator_key, denominator_key = metric.split("/")
+                                numerator_vals = compute_equilibrium_value(
+                                    policy_metrics,
+                                    numerator_key,
+                                    summary_wd,
+                                    use_first,
+                                    start_from,
+                                )
+                                denominator_vals = compute_equilibrium_value(
+                                    policy_metrics,
+                                    denominator_key,
+                                    summary_wd,
+                                    use_first,
+                                    start_from,
+                                )
+                                # Compute ratio (both are sums over summary_wd periods)
+                                policy_vals = numerator_vals / denominator_vals
+                                # For ratios, we don't divide by summary_wd again
+                                policy_vals_per_period = policy_vals
+                            else:
+                                # Compute values (sum over summary_wd periods)
+                                policy_vals = compute_equilibrium_value(
+                                    policy_metrics,
+                                    metric,
+                                    summary_wd,
+                                    use_first,
+                                    start_from,
+                                )
+                                # Compute absolute statistics (averaged per period)
+                                # Dividec by summary_wd to get per-period average
+                                policy_vals_per_period = policy_vals / summary_wd
 
                             # Store result
                             results[metric].append(
@@ -364,7 +386,9 @@ def plot_all_term_lengths(
 
         for term_length in term_lengths:
             # Create base filename (without extension)
-            filename = f"{metric_name}_term_length_{term_length}"
+            # Sanitize metric name for filename (replace / with _per_)
+            metric_filename = metric_name.replace("/", "_per_")
+            filename = f"{metric_filename}_term_length_{term_length}"
             if relative:
                 filename += f"_rel_{relative_policy}"
             output_path = os.path.join(output_dir, filename)

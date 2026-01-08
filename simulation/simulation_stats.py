@@ -118,15 +118,18 @@ def summarize_trajectory(
         # arrivals and departures
         # arrivals: people arriving at end of period (ep_arrival == _boundary)
         _arrive_now_mask = df_curr["ep_arrival"] == _boundary
+        lmd = df_curr.loc[_arrive_now_mask].groupby(grp_keys_cur)["index"].count()
+
+        # lv: people present at start who leave at boundary due to END_OF_PROCESS (type_left == 1)
         # departures: use df_curr for ep_leaving (set when leaving event processed)
         _leave_now_mask = df_curr["ep_leaving"] == _boundary
-        lmd = df_curr.loc[_arrive_now_mask].groupby(grp_keys_cur)["index"].count()
-        # lv: people present at start who leave at boundary
-        _leave_indices = df_presence_begin.index.intersection(
-            df_curr[_leave_now_mask].index
+        _leave_end_of_process_indices = df_presence_begin.index.intersection(
+            df_curr[_leave_now_mask & (df_curr["type_left"] == 1)].index
         )
         lv = (
-            df_presence_begin.loc[_leave_indices].groupby(grp_keys_cur)["index"].count()
+            df_presence_begin.loc[_leave_end_of_process_indices]
+            .groupby(grp_keys_cur)["index"]
+            .count()
         )
 
         # inc: incarcerated during the period (type_left == 3 means INCARCERATION)
@@ -139,22 +142,10 @@ def summarize_trajectory(
             .count()
         )
 
-        # nr: number of returns during the period (difference in return_times)
-        if "return_times" in df_prev.columns and "return_times" in df_curr.columns:
-            df_returns = pd.DataFrame(
-                {
-                    "index": idx_common,
-                    "state_curr": df_curr.loc[idx_common, "state"],
-                    "rt_prev": df_prev.loc[idx_common, "return_times"],
-                    "rt_curr": df_curr.loc[idx_common, "return_times"],
-                }
-            ).assign(returns=lambda df: df["rt_curr"] - df["rt_prev"])
-            nr = (
-                df_returns[df_returns["returns"] > 0]
-                .groupby("state_curr")["returns"]
-                .sum()
-                .rename_axis(grp_keys_cur[0] if grp_keys_cur else "state")
-            )
+        # nr: number of returns during the period (ep_return == _boundary)
+        if "ep_return" in df_curr.columns:
+            _return_now_mask = df_curr["ep_return"] == _boundary
+            nr = df_curr.loc[_return_now_mask].groupby(grp_keys_cur)["index"].count()
         else:
             nr = pd.Series(dtype=float)
 
@@ -182,7 +173,9 @@ def summarize_trajectory(
                 xcal=lambda df: df.apply(
                     lambda row: row["x0"]
                     + row["lmd"]
+                    + row["nr"]
                     - row["lv"]
+                    - row["inc"]
                     + row["yin"]
                     - row["yout"],
                     axis=1,
@@ -629,6 +622,8 @@ def evaluation_metrics(results_df):
     tau_rel_list = []
     x0_list = []  # population size per state
     yin_list = []  # offenses per state
+    inc_list = []  # incarcerated per state
+    lv_list = []  # exits/departures per state
     lengths = []
 
     for df in results_df:
@@ -660,11 +655,15 @@ def evaluation_metrics(results_df):
         tau_rel = df["tau_rel"].values if "tau_rel" in df.columns else np.zeros(len(df))
         x0 = df["x0"].values if "x0" in df.columns else np.zeros(len(df))
         yin = df["yin"].values if "yin" in df.columns else np.zeros(len(df))
+        inc = df["inc"].values if "inc" in df.columns else np.zeros(len(df))
+        lv = df["lv"].values if "lv" in df.columns else np.zeros(len(df))
         index_list.append(idx_arr)
         tau_list.append(tau)
         tau_rel_list.append(tau_rel)
         x0_list.append(x0)
         yin_list.append(yin)
+        inc_list.append(inc)
+        lv_list.append(lv)
         lengths.append(len(df))
 
     # Flatten into arrays for storage (indices shared across all per-state metrics)
@@ -686,6 +685,12 @@ def evaluation_metrics(results_df):
     metrics["population_yin_flat"] = (
         np.concatenate(yin_list) if yin_list else np.array([])
     )
+
+    # Incarcerated and exits data (uses shared indices)
+    metrics["population_inc_flat"] = (
+        np.concatenate(inc_list) if inc_list else np.array([])
+    )
+    metrics["population_lv_flat"] = np.concatenate(lv_list) if lv_list else np.array([])
 
     # Keep legacy names for backward compatibility
     metrics["treatment_index_flat"] = metrics["state_index_flat"]
@@ -724,6 +729,8 @@ def recover_per_state_as_df(metrics, rep=None, columns=None):
         "tau_rel": metrics.get("treatment_tau_rel_flat"),
         "x0": metrics.get("population_x0_flat"),
         "yin": metrics.get("population_yin_flat"),
+        "inc": metrics.get("population_inc_flat"),
+        "lv": metrics.get("population_lv_flat"),
     }
 
     # Determine which columns to include
@@ -762,10 +769,22 @@ def recover_per_state_as_df(metrics, rep=None, columns=None):
                 episodes = np.repeat(np.arange(len(lens)), lens)
                 reps = np.full(len(states), r)
 
+                # Validate data lengths match index length
+                index_len = len(states)
+                data = {}
+                for col in columns:
+                    col_data = available_data[col][r]
+                    if len(col_data) != index_len:
+                        raise ValueError(
+                            f"Length mismatch for column '{col}' in rep {r}: "
+                            f"data has {len(col_data)} entries but index has {index_len}. "
+                            f"This may indicate the data was saved with a different state structure."
+                        )
+                    data[col] = col_data
+
                 multi_idx = pd.MultiIndex.from_arrays(
                     [reps, states, episodes], names=["rep", "state", "p"]
                 )
-                data = {col: available_data[col][r] for col in columns}
                 df = pd.DataFrame(data, index=multi_idx)
                 dfs.append(df)
             return pd.concat(dfs)
@@ -804,7 +823,7 @@ def recover_population_as_df(metrics, rep=None):
 def compute_equilibrium_stats(all_metrics, metric_key="tau", last_n=10):
     """
     Compute equilibrium average of a metric over the last N episodes across all reps.
-    Only considers states where stage == 'p' (probation, encoded as 0).
+    Aggregates by (offenses, age_dist), summing across has_been_treated and stage.
 
     Args:
         all_metrics: dict from read_metrics_from_h5 containing per-state fields
@@ -812,26 +831,23 @@ def compute_equilibrium_stats(all_metrics, metric_key="tau", last_n=10):
         last_n: number of episodes from the end to average over (default 10)
 
     Returns:
-        (df_mean, df_std, df_mean_raw, df_std_raw): four DataFrames with:
+        (df_mean, df_std): two DataFrames with:
             - rows = age_dist (second dim of state)
             - columns = offenses (first dim of state)
-            - df_mean: normalized so all cells sum to 1
-            - df_std: each cell scaled by its mean value (coefficient of variation)
-            - df_mean_raw: raw mean values before normalization
-            - df_std_raw: raw std values before scaling
+            - df_mean: raw mean values (sum across all states with same offenses, age_dist)
+            - df_std: raw std values
 
     Note: State structure is (offenses, age_dist, has_been_treated, stage_encoded)
-          where stage_encoded: 0='p' (probation), 1='f' (off-probation)
     """
     # Recover per-state data as DataFrame using shared function
     df = recover_per_state_as_df(all_metrics, rep=None, columns=[metric_key])
 
     # df has MultiIndex (rep, state, p) where state is a tuple
-    # Filter to last_n episodes per rep and probation stage only
+    # Filter to last_n episodes per rep
     n_reps = df.index.get_level_values("rep").nunique()
 
     # Collect per-state data across all reps
-    # state_data[state_key] = [val1, val2, ...] where each entry is one rep's average
+    # state_data[state_key] = [val1, val2, ...] where each entry is one rep's SUM for that episode window
     state_data = defaultdict(list)
 
     for rep in range(n_reps):
@@ -846,15 +862,21 @@ def compute_equilibrium_stats(all_metrics, metric_key="tau", last_n=10):
         # Filter to last_n episodes
         rep_df = rep_df[rep_df.index.get_level_values("p") >= ep_start]
 
-        # Group by state and compute mean
+        # First, sum across all states per episode to get total per (offenses, age_dist)
+        # Then take mean across episodes
+        episode_sums = defaultdict(lambda: defaultdict(float))
         for state, group in rep_df.groupby(level="state"):
             # State structure: (offenses, age_dist, has_been_treated, stage_encoded)
-            # Filter: only probation (stage_encoded == 0 means 'p')
-            if len(state) >= 4 and state[3] != 0:
-                continue
-            # Use (offenses, age_dist) as key, ignoring has_been_treated and stage
+            # Use (offenses, age_dist) as key, summing across has_been_treated and stage
             state_key = (state[0], state[1])
-            state_data[state_key].append(group[metric_key].mean())
+            for p, val in group[metric_key].items():
+                episode_idx = p[1]  # p is (state, episode_idx)
+                episode_sums[state_key][episode_idx] += val
+
+        # Now compute mean across episodes for this rep
+        for state_key, ep_vals in episode_sums.items():
+            mean_val = np.mean(list(ep_vals.values()))
+            state_data[state_key].append(mean_val)
 
     # Build result: rows = age_dist, columns = offenses
     # state_key = (offenses, age_dist)
@@ -878,26 +900,19 @@ def compute_equilibrium_stats(all_metrics, metric_key="tau", last_n=10):
         std_data[offenses][age_dist] = np.std(arr)
 
     # Build DataFrames: rows = age_dist, columns = offenses
-    df_mean_raw = pd.DataFrame(
+    df_mean = pd.DataFrame(
         mean_data, index=age_dist_sorted, columns=offenses_sorted
     ).fillna(0)
-    df_std_raw = pd.DataFrame(
+    df_std = pd.DataFrame(
         std_data, index=age_dist_sorted, columns=offenses_sorted
     ).fillna(0)
-
-    # Normalize mean_df so all cells sum to 1
-    total_sum = df_mean_raw.values.sum()
-    df_mean = df_mean_raw / total_sum if total_sum > 0 else df_mean_raw
-
-    # Scale std_df by mean values (coefficient of variation)
-    df_std = df_std_raw / df_mean_raw.replace(0, np.nan)
 
     df_mean.index.name = "age_dist"
     df_mean.columns.name = "offenses"
     df_std.index.name = "age_dist"
     df_std.columns.name = "offenses"
 
-    return df_mean, df_std, df_mean_raw, df_std_raw
+    return df_mean, df_std
 
 
 # Backward compatibility alias
