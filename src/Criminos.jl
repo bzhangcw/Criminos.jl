@@ -1,220 +1,59 @@
 module Criminos
+using LinearAlgebra, SparseArrays, SpecialFunctions
+using ForwardDiff, LinearAlgebra, Random, Statistics
+using Printf, LaTeXStrings, Plots, ProgressMeter, ColorSchemes
+using CSV, Tables, DataFrames, YAML, JSON, PrettyTables, HDF5
+using JuMP, UnoSolver
 
-using JuMP, Ipopt, COPT, MosekTools
-using ProgressMeter
-greet() = print("Hello World!")
+include("tools.jl")
 
-EPS_FP = 1e-5
-USE_KL = false
-USE_GUROBI = false
-USE_CONIC_DECISION = true
+include("discrete/state.jl")
+include("discrete/glquad.jl")
+include("discrete/routing.jl")
+include("discrete/datarec.jl")
+include("discrete/fixp2drec.jl")
+include("continuous/fixp2cont.jl")
 
-if USE_GUROBI
-    using Gurobi
-    const GRB_ENV = Ref{Gurobi.Env}()
-    GRB_ENV[] = Gurobi.Env()
-    create_default_gurobi_model(logf="/tmp/grb.log") = begin
-        Model(optimizer_with_attributes(
-            () -> Gurobi.Optimizer(GRB_ENV[]),
-            "NonConvex" => 2,
-            "LogToConsole" => 0,
-            "LogFile" => logf
-        ))
-    end
-end
-if USE_KL
-    using Ipopt
-    create_default_ipopt_model() = begin
-        Model(optimizer_with_attributes(
-            () -> Ipopt.Optimizer(),
-            "print_level" => 0
-        ))
-    end
-end
+include("discrete/policies.jl")
+include("discrete/policies.madnlp.jl")
 
-create_default_copt_model() = begin
-    Model(
-        optimizer_with_attributes(
-            () -> COPT.Optimizer(),
-            "LogToConsole" => false
-        ))
-end
-
-ℓ = 1
-mutable struct BarrierOption
-    μ::Float64
-end
-
-mutable struct GNEPMixinOption
-    y::Union{Nothing,Any}
-    ycon::Union{Nothing,Any}
-    is_setup::Bool
-    is_kl::Bool
-    model::Union{Nothing,Model}
-end
-
-mutable struct XInitHelper
-    x::Union{Nothing,Any}
-    ρ::Union{Nothing,Any}
-    is_setup::Bool
-    model::Union{Nothing,Model}
-    c1::Union{Nothing,Any}
-    c2::Union{Nothing,Any}
-end
-
-mutable struct DecisionOption
-    τ::Union{Nothing,Any}
-    ℓ::Union{Nothing,Any}
-    h::Union{Nothing,Any}
-    I::Union{Nothing,Any}
-    τcon::Union{Nothing,Any}
-    is_setup::Bool
-    is_conic::Bool
-    model::Union{Nothing,Model}
-end
+export generate_random_data, compute_Psi_ct_composed
+export F, Fc!
+export State, randz, z_diff, get_x, get_y, safe_ratio
+export visualize_results, visualize_state, visualize_matrix, visualize_vector
 
 
-default_barrier_option = BarrierOption(5e-2)
-default_gnep_mixin_option = Ref{GNEPMixinOption}()
-default_xinit_option = Ref{XInitHelper}()
-default_decision_option = Ref{DecisionOption}()
-default_decision_conic_option = Ref{DecisionOption}()
-function __init__()
-    global default_gnep_mixin_option, default_xinit_option
-    global default_decision_option, default_decision_conic_option
-    if USE_GUROBI
-        create_default_gurobi_model()
-        default_gnep_mixin_option = GNEPMixinOption(
-            nothing,
-            nothing,
-            false,
-            USE_KL,
-            _md
-        )
-    elseif USE_KL
-        _md = create_default_ipopt_model()
-    else
-        _md = create_default_copt_model()
-    end
-    default_gnep_mixin_option = GNEPMixinOption(
-        nothing,
-        nothing,
-        false,
-        USE_KL,
-        _md
-    )
-    default_xinit_option = XInitHelper(
-        nothing,
-        nothing,
-        false,
-        create_default_copt_model(),
-        nothing,
-        nothing
-    )
-    if USE_CONIC_DECISION
-        _md_decision = Model(optimizer_with_attributes(
-            () -> Mosek.Optimizer(),
-            "MSK_IPAR_LOG" => 0
-        ))
-        default_decision_conic_option = DecisionOption(
-            nothing,
-            nothing,
-            nothing,
-            nothing,
-            nothing,
-            false,
-            USE_CONIC_DECISION,
-            _md_decision
-        )
-    end
-    default_decision_option = DecisionOption(
-        nothing,
-        nothing,
-        nothing,
-        nothing,
-        nothing,
-        false,
-        false,
-        create_default_copt_model()
-    )
-end
-
-export default_barrier_option
-export default_gnep_mixin_option
-export default_xinit_option
-export default_decision_option, default_decision_conic_option
-
-##################################################
-# sigfault when using constant env here.
-# const GRB_ENV = Ref{Gurobi.Env}()
-# GRB_ENV[] = Gurobi.Env()
-##################################################
-
-include("state.jl")
-include("bidiag.jl")
-include("fixpoint.jl")
-include("mixin.jl")
-include("potfunc.jl")
-include("utils.jl")
-include("decision.jl")
-include("fit.jl")
-include("fittraj.jl")
-
-export find_x
-
-function simulate(
-    vector_ms::Vector{MarkovState{R,TR}},
-    vec_Ψ,
-    Fp;
-    K=10000, metrics=[Lₓ, Lᵨ, ΔR, KL],
-    bool_verbose=false,
-    bool_opt=true,
-    tol=1e-7
-) where {R,TR}
-    ε = Dict()
-    # --------------------------------------------------
-    # !!! do not change the original
-    # --------------------------------------------------
-    Vz = copy.(vector_ms)
-    traj = []
-    r = length(Vz)
-    kₑ = 0
-    eps = zeros(r)
-    p = Progress(K)
-    for k::Int in 1:K
-        push!(traj, Vz)
-        _Vz = copy.(Vz)
-        # FP iteration
-        Fp(_Vz)
-        for (id, z) in enumerate(_Vz)
-            # cal FP residual
-            eps[id] = (norm(Vz[id].x - z.x) + norm(Vz[id].y - z.y)) / maximum(z.x)
-        end
-        kₑ = k
-        if maximum(eps) < tol
-            @info "converged in $kₑ steps"
+function run(z₀, data;
+    fτ=nothing,
+    p=zeros(data[:n]),
+    max_iter=500,
+    verbose=false,
+    validate=false,
+    func_traj=copy,
+    keep_traj=false
+)
+    n = data[:n]
+    z = copy(z₀)
+    traj = keep_traj ? [func_traj(z)] : []
+    for t in 1:500
+        τ₊, _... = isnothing(fτ) ? (zeros(n), nothing) : fτ(z)
+        z₊ = copy(z)
+        Fc!(z, z₊, data; τ=τ₊, p=p, validate=validate)
+        ϵ = z_diff(z₊, z)
+        z = z₊
+        # @info "" z.x z.y z.μ
+        if (ϵ < 1e-6) || (t > max_iter)
+            println("ϵ = $ϵ, convergence in $t steps")
             break
         end
-        Vz = _Vz
-        k += 1
-        next!(p)
-    end
-    finish!(p)
-    @info "final eps: $(maximum(eps))"
-    for (id, z) in enumerate(Vz)
-        for (func, fname) in metrics
-            z₊ = traj[end][id]
-            ε[id, fname] = [func(traj[j][id], z₊) for j in 1:kₑ]
+        keep_traj && push!(traj, func_traj(z))
+        if verbose
+            println("ϵ = $ϵ, currently $t steps")
         end
     end
-    return kₑ, ε, traj, bool_opt
+    return z, traj
 end
 
+export run
 
-export MarkovState
-export BidiagSys
-export F!
-export optalg, ν, σ
-export tuning
-export fit_trajectory, fit_mp, fit_cournot, fit_cournot_traj
 end # module Criminos

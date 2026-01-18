@@ -1,5 +1,7 @@
 # extras
 ipynb/*
+__unused__/*
+__unused
 @milestone-*
 result-*
 archive
