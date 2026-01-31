@@ -8,14 +8,16 @@ using JuMP, UnoSolver
 include("tools.jl")
 
 include("discrete/state.jl")
-include("discrete/glquad.jl")
+include("discrete/idiosyncrasy.jl")        # base interface + constant idiosyncrasy
+include("discrete/idiosyncrasy_gamma.jl")  # Gamma frailty (GL quadrature)
 include("discrete/routing.jl")
 include("discrete/datarec.jl")
-include("discrete/fixp2drec.jl")
+include("discrete/fixedpoint.jl")
 include("continuous/fixp2cont.jl")
 
 include("discrete/policies.jl")
 include("discrete/policies.madnlp.jl")
+include("discrete/policies.uno.jl")
 
 export generate_random_data, compute_Psi_ct_composed
 export F, Fc!
@@ -26,16 +28,18 @@ export visualize_results, visualize_state, visualize_matrix, visualize_vector
 function run(z₀, data;
     fτ=nothing,
     p=zeros(data[:n]),
-    max_iter=500,
+    max_iter=5000,
     verbose=false,
     validate=false,
     func_traj=copy,
-    keep_traj=false
+    keep_traj=false,
+    verbose_interval=20
 )
     n = data[:n]
     z = copy(z₀)
     traj = keep_traj ? [func_traj(z)] : []
-    for t in 1:500
+    t = 0
+    while true
         τ₊, _... = isnothing(fτ) ? (zeros(n), nothing) : fτ(z)
         z₊ = copy(z)
         Fc!(z, z₊, data; τ=τ₊, p=p, validate=validate)
@@ -47,9 +51,10 @@ function run(z₀, data;
             break
         end
         keep_traj && push!(traj, func_traj(z))
-        if verbose
+        if verbose && (t % verbose_interval == 0)
             println("ϵ = $ϵ, currently $t steps")
         end
+        t += 1
     end
     return z, traj
 end

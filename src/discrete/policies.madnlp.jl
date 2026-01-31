@@ -1,7 +1,113 @@
 using JuMP, NLPModels, NLPModelsJuMP, MadNLP, MadNLPHSL
+using ADNLPModels
 solver = MadNLPHSL.Ma57Solver
 
-function __policy_opt_sd_madnlp(z, data, C, ϕ, p; obj_style=1)
+@doc raw"""
+    __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1)
+
+Steady-state optimization using ADNLPModels directly (no JuMP).
+Variables: [τ (n), x (4n), y (4n)] = 9n total
+"""
+function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=true, max_wall_time=500.0, accuracy=1e-4, τ₀=nothing)
+    n = data[:n]
+    nvar = 9n  # τ (n) + x (4n) + y (4n)
+    ncon = 8n + 1  # fixed point constraints (8n) + capacity (1)
+
+    # Variable layout: [τ; x_p0; x_f0; x_p1; x_f1; y_p0; y_f0; y_p1; y_f1]
+    # Indices
+    idx_τ = 1:n
+    idx_x = (n+1):(5n)
+    idx_y = (5n+1):(9n)
+
+    # Bounds: τ ∈ [0,1], x ≥ 0, y ≥ 0
+    lvar = zeros(nvar)
+    uvar = fill(Inf, nvar)
+    uvar[idx_τ] .= 1.0  # τ ≤ 1
+
+    # Initial point from current state
+    x0 = zeros(nvar)
+    if τ₀ === nothing
+        x0[idx_τ] .= 0.0 # must be feasible.
+    else
+        x0[idx_τ] .= τ₀
+    end
+    x0[idx_x] .= vec(z.x)  # flatten column-major: [p0; f0; p1; f1]
+    x0[idx_y] .= vec(z.y)
+
+    # Objective function
+    function obj(w)
+        if obj_style == 1
+            # min sum(y)
+            return sum(w[idx_y])
+        else
+            # min sum(x, dims=2)' * ϕ
+            x_mat = reshape(w[idx_x], n, 4)
+            return sum(sum(x_mat, dims=2) .* ϕ)
+        end
+    end
+
+    # Constraint function: c(w) = 0 for equality, c(w) ≤ 0 for inequality
+    # We use: [x - F_x(x,y,μ;τ); y - F_y(x,y,μ;τ); sum(x_p1) - C]
+    function con!(c, w)
+        τv = w[idx_τ]
+        xv = reshape(w[idx_x], n, 4)
+        yv = reshape(w[idx_y], n, 4)
+
+        # Compute μ
+        μ = sum(yv) / (sum(xv) + 1e-8)
+
+        # Compute F
+        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(xv, yv, μ, data; τ=τv, p=p)
+
+        # Fixed point constraints: x == F_x, y == F_y
+        c[1:n] .= xv[:, 1] .- x₊1
+        c[n+1:2n] .= xv[:, 2] .- x₊2
+        c[2n+1:3n] .= xv[:, 3] .- x₊3
+        c[3n+1:4n] .= xv[:, 4] .- x₊4
+        c[4n+1:5n] .= yv[:, 1] .- y₊1
+        c[5n+1:6n] .= yv[:, 2] .- y₊2
+        c[6n+1:7n] .= yv[:, 3] .- y₊3
+        c[7n+1:8n] .= yv[:, 4] .- y₊4
+
+        # Capacity constraint: sum(x_p1) ≤ C  =>  sum(x_p1) - C ≤ 0
+        c[8n+1] = sum(xv[:, 3]) - C
+
+        return c
+    end
+
+    # Constraint bounds: equality for fixed point, inequality for capacity
+    lcon = zeros(ncon)
+    ucon = zeros(ncon)
+    ucon[8n+1] = 0.0  # capacity: c ≤ 0
+    lcon[8n+1] = -Inf  # capacity: -∞ ≤ c
+
+    # Create ADNLPModel
+    nlp = ADNLPModel!(obj, x0, lvar, uvar, con!, lcon, ucon)
+
+    @info "starting to solve with MadNLP"
+    # Solve with MadNLP
+    lvl = verbose ? MadNLP.INFO : MadNLP.ERROR
+    stats = madnlp(nlp,
+        linear_solver=solver,
+        max_wall_time=max_wall_time,
+        max_iter=10000,
+        print_level=lvl,
+        kkt_system=MadNLP.SparseCondensedKKTSystem,
+        hessian_approximation=MadNLP.CompactLBFGS,
+        tol=accuracy
+    )
+
+    # Extract solution
+    sol = stats.solution
+    τ₊ = sol[idx_τ]
+    x₊ = reshape(sol[idx_x], n, 4)
+    y₊ = reshape(sol[idx_y], n, 4)
+    μ₊ = safe_ratio(sum(y₊), sum(x₊))
+
+    return τ₊, y₊, State(n, x₊, y₊, μ₊), stats
+end
+
+function __policy_opt_sd_madnlp_jump(z, data, C, ϕ, p; obj_style=1)
     m = Model(MadNLP.Optimizer)
     n = data[:n]
     # columns labels: p0, f0, p1, f1
@@ -51,6 +157,7 @@ function __policy_opt_sd_madnlp(z, data, C, ϕ, p; obj_style=1)
 end
 
 
+
 function __policy_opt_myopic_madnlp(z, data, C, ϕ, p; obj_style=1, verbose=false)
     m = Model(MadNLP.Optimizer)
     n = data[:n]
@@ -87,4 +194,68 @@ function __policy_opt_myopic_madnlp(z, data, C, ϕ, p; obj_style=1, verbose=fals
     y₊ = z₊.y
     μ₊ = z₊.μ
     return τ₊, y₊, z₊, nothing
+end
+
+"""
+    __policy_opt_myopic_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=false)
+
+Myopic (one-step lookahead) optimization using ADNLPModels directly (no JuMP).
+Variables: τ (n)
+"""
+function __policy_opt_myopic_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=false)
+    n = data[:n]
+    nvar = n  # only τ
+    ncon = 1  # capacity constraint
+
+    # Bounds: τ ∈ [0,1]
+    lvar = zeros(nvar)
+    uvar = ones(nvar)
+
+    # Initial point
+    x0 = fill(0.5, nvar)
+
+    # Precompute current state (fixed during optimization)
+    x_curr = z.x
+    y_curr = z.y
+    μ_curr = z.μ
+
+    # Objective: min sum(y₊) where y₊ = F_y(x, y, μ; τ)
+    function obj(τv)
+        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(x_curr, y_curr, μ_curr, data; τ=τv, p=p)
+        return sum(y₊1) + sum(y₊2) + sum(y₊3) + sum(y₊4)
+    end
+
+    # Constraint: sum(x₊3) ≤ C  =>  sum(x₊3) - C ≤ 0
+    function con!(c, τv)
+        x₊1, x₊2, x₊3, x₊4, _, _, _, _ = F(x_curr, y_curr, μ_curr, data; τ=τv, p=p)
+        c[1] = sum(x₊3) - C
+        return c
+    end
+
+    # Constraint bounds: -∞ ≤ c ≤ 0
+    lcon = [-Inf]
+    ucon = [0.0]
+
+    # Create ADNLPModel
+    nlp = ADNLPModel!(obj, x0, lvar, uvar, con!, lcon, ucon)
+
+    # Solve with MadNLP
+    lvl = verbose ? MadNLP.INFO : MadNLP.ERROR
+    stats = madnlp(nlp,
+        linear_solver=solver,
+        max_wall_time=900.0,
+        max_iter=1000,
+        print_level=lvl,
+        kkt_system=MadNLP.SparseCondensedKKTSystem,
+        hessian_approximation=MadNLP.CompactLBFGS,
+        tol=1e-4
+    )
+
+    τ₊ = stats.solution
+
+    # Apply the policy to get next state
+    z₊ = copy(z)
+    Fc!(z, z₊, data; τ=τ₊, p=p)
+
+    return τ₊, z₊.y, z₊, stats
 end

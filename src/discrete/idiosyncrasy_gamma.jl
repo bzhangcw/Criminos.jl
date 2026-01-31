@@ -1,9 +1,77 @@
 # ------------------------------------------------------------
-# Gauss-Legendre (GL-16) quadrature 
-#   for the Gamma mixture integrals.
+# Gamma idiosyncrasy for individual-level random effects
+#
+# This file implements the Gamma frailty model:
+#   exp(α_i) ~ Gamma(k, θ)
+#
+# Uses Gauss-Legendre (GL-16) quadrature for numerical integration.
 # ------------------------------------------------------------
 
-_GL16_x = [
+using SpecialFunctions: gamma
+
+"""
+    GammaIdiosyncrasy(k=3.97, θ=2.05)
+
+Individual idiosyncrasy with exp(α_i) ~ Gamma(k, θ).
+Requires GL quadrature for integration.
+"""
+struct GammaIdiosyncrasy <: AbstractIdiosyncrasy
+    k::Float64
+    θ::Float64
+    GammaIdiosyncrasy(k::Float64=3.97, θ::Float64=2.05) = new(k, θ)
+end
+
+function create_Fφ(idio::GammaIdiosyncrasy, η::Real, n::Int)
+    k, θ = idio.k, idio.θ
+    # Gamma mixture: integrate exp(α) ~ Gamma(k, θ)
+    # Result: φ = 1 - (θ / (θ + η*exp(h)))^k
+    __Fφ(h) = 1 - (θ / (θ + η * exp(h)))^k
+
+    Fφ(h; p=ones(n)) = begin
+        ϕ = __Fφ.(h)
+        return Dict(0 => ϕ[1:n], 1 => ϕ[n+1:2n])
+    end
+    return Fφ
+end
+
+function compute_return_rates(idio::GammaIdiosyncrasy, data::Union{SortedDict,Dict}, μ; p=ones(data[:n]))
+    return compute_return_rates_gamma(idio, data, μ; p=p)
+end
+
+# ------------------------------------------------------------
+# Gamma return rate computation
+# ------------------------------------------------------------
+
+@doc raw"""
+    compute_return_rates_gamma(idio, data, μ; p=ones(n)) -> Dict(0=>r0, 1=>r1)
+    
+Compute cohort-wise return rates r = ϕ_f / (1 - s_f) using GL-16 quadrature
+for the Gamma mixture integral. Does not modify `data`.
+
+Uses assumption: exp(α_i) ~ Gamma(k, θ)
+"""
+function compute_return_rates_gamma(idio::GammaIdiosyncrasy, data::Union{SortedDict,Dict}, μ; p=ones(data[:n]))
+    n = data[:n]
+    η = data[:η]
+    k, θ = idio.k, idio.θ
+    Ωf = @. -log(max(data[:σ], 1e-9))
+    h = data[:Fh](μ; p=p)
+    h0 = h[1:n]
+    h1 = h[n+1:2n]
+    A0 = η .* exp.(h0)
+    A1 = η .* exp.(h1)
+    ϕ0f, _χ0f, s0f = _gl16_cr_split_vec(A0, Ωf, k, θ)
+    ϕ1f, _χ1f, s1f = _gl16_cr_split_vec(A1, Ωf, k, θ)
+    r0 = ϕ0f ./ max.(1 .- s0f, 1e-12)
+    r1 = ϕ1f ./ max.(1 .- s1f, 1e-12)
+    return Dict(0 => r0, 1 => r1)
+end
+
+# ------------------------------------------------------------
+# Gauss-Legendre (GL-16) quadrature nodes and weights
+# ------------------------------------------------------------
+
+const _GL16_x = [
     0.9894009349916499325961542,
     0.9445750230732325760779884,
     0.8656312023878317438804679,
@@ -13,7 +81,8 @@ _GL16_x = [
     0.2816035507792589132304605,
     0.0950125098376374401853193,
 ]
-_GL16_w = [
+
+const _GL16_w = [
     0.0271524594117540948517806,
     0.0622535239386478928628438,
     0.0951585116824927848099251,
@@ -23,13 +92,15 @@ _GL16_w = [
     0.1826034150449235888667637,
     0.1894506104550684962853967,
 ]
+
 # ------------------------------------------------------------
-# Gauss-Legendre (GL-16) quadrature for the Gamma mixture integral
+# GL-16 integration routines
 # ------------------------------------------------------------
+
 @doc """
     _gl16_integral(f) -> Real
 
-    @note: compute ∫₀¹ f(t) dt using 16-point Gauss-Legendre quadrature.
+Compute ∫₀¹ f(t) dt using 16-point Gauss-Legendre quadrature.
 """
 _gl16_integral(f) = begin
     s = 0.0
@@ -43,11 +114,12 @@ end
 
 @doc """
     _gl16_cr_split_scalar(A, Ω, k, θ) -> φ, χ, s
-    @note: compute the Gamma mixture integral for a single element:
-        s = e^{-Ω} (θ/(θ + A))^k
-        I = ∫_0^1 e^{-t Ω} (θ/(θ + t A))^k dt  (GL-16 quadrature)
-        φ = 1 - s - Ω * I
-        χ = 1 - s - φ
+
+Compute the Gamma mixture integral for competing risks (scalar version):
+    s = e^{-Ω} (θ/(θ + A))^k           (survival)
+    I = ∫_0^1 e^{-t Ω} (θ/(θ + t A))^k dt  (GL-16 quadrature)
+    φ = 1 - s - Ω * I                   (recidivism)
+    χ = 1 - s - φ                       (other exit)
 """
 _gl16_cr_split_scalar(A, Ω, k, θ) = begin
     s = exp(-Ω) * (θ / (θ + A))^k
@@ -59,7 +131,8 @@ end
 
 @doc """
     _gl16_cr_split_vec(A, Ω, k, θ) -> φ, χ, s
-    @note: vectorized version of `_gl16_cr_split_scalar`.
+
+Vectorized version of `_gl16_cr_split_scalar`.
 """
 _gl16_cr_split_vec(A::AbstractVector, Ω::AbstractVector, k::Real, θ::Real) = begin
     n = length(A)
@@ -73,9 +146,8 @@ _gl16_cr_split_vec(A::AbstractVector, Ω::AbstractVector, k::Real, θ::Real) = b
 end
 
 # ------------------------------------------------------------
-# Gamma distribution utilities for GL-16 quadrature
+# Gamma distribution utilities
 # ------------------------------------------------------------
-using SpecialFunctions: gamma
 
 @doc """
     _gamma_pdf(g, k, θ) -> Real
@@ -96,9 +168,7 @@ function _gamma_quantile_approx(p::Real, k::Real, θ::Real)
     elseif p >= 1
         return 10 * k / θ  # large value
     end
-    # Wilson-Hilferty approximation for chi-squared, adapted for Gamma
-    # For X ~ Gamma(k, θ), X ≈ (k/θ) * (1 + z*sqrt(2/(9k)) + (z^2 - 1)/(9k))^3
-    # where z = Φ^{-1}(p)
+    # Wilson-Hilferty approximation
     z = _norminv(p)
     cube = 1 + z * sqrt(2 / (9 * k)) - 1 / (9 * k)
     cube = max(cube, 0.01)
@@ -111,7 +181,6 @@ end
 Approximate standard normal inverse CDF (probit function).
 """
 function _norminv(p::Real)
-    # Rational approximation (Abramowitz & Stegun)
     if p <= 0
         return -6.0
     elseif p >= 1
@@ -130,6 +199,7 @@ end
 
 # ------------------------------------------------------------
 # GL-16 averaged competing-risk probabilities for CT model
+# (continuous-time with Gamma idiosyncrasy)
 # ------------------------------------------------------------
 
 @doc """
@@ -146,11 +216,8 @@ Compute Gamma-averaged CT competing-risk probabilities for a single cohort:
 - inc_f = E[δ_inc*λ/(λ+ωf) (1 - exp(-(λ+ωf)Δ))]       (incarcerated from follow-up)
 
 where λ = A * g and g ~ Gamma(k, θ), δ_inc is incarceration probability upon reoffense.
-
-Note: s_p + m_pf + y_p + inc_p = 1 and s_f + x_f + y_f + inc_f = 1 (competing risks).
 """
 function _gl16_ct_probs_scalar(A::Real, ωp::Real, ωf::Real, Δ::Real, k::Real, θ::Real; δ_inc::Real=0.0)
-    # For numerical stability, use truncated support [0, g_max] where g_max captures 99.99% mass
     g_max = _gamma_quantile_approx(0.9999, k, θ)
 
     s_p = _gl16_integral(t -> begin
@@ -170,7 +237,6 @@ function _gl16_ct_probs_scalar(A::Real, ωp::Real, ωf::Real, Δ::Real, k::Real,
         val * pdf_g * g_max
     end)
 
-    # Total recidivism probability (before splitting by incarceration)
     y_p_total = _gl16_integral(t -> begin
         g = t * g_max
         λ = A * g
@@ -179,11 +245,9 @@ function _gl16_ct_probs_scalar(A::Real, ωp::Real, ωf::Real, Δ::Real, k::Real,
         pdf_g = _gamma_pdf(g, k, θ)
         val * pdf_g * g_max
     end)
-    # Split by incarceration
     y_p = (1 - δ_inc) * y_p_total
     inc_p = δ_inc * y_p_total
 
-    # Follow-up arm integrals
     s_f = _gl16_integral(t -> begin
         g = t * g_max
         λ = A * g
@@ -201,7 +265,6 @@ function _gl16_ct_probs_scalar(A::Real, ωp::Real, ωf::Real, Δ::Real, k::Real,
         val * pdf_g * g_max
     end)
 
-    # Total recidivism probability from follow-up (before splitting by incarceration)
     y_f_total = _gl16_integral(t -> begin
         g = t * g_max
         λ = A * g
@@ -210,7 +273,6 @@ function _gl16_ct_probs_scalar(A::Real, ωp::Real, ωf::Real, Δ::Real, k::Real,
         pdf_g = _gamma_pdf(g, k, θ)
         val * pdf_g * g_max
     end)
-    # Split by incarceration
     y_f = (1 - δ_inc) * y_f_total
     inc_f = δ_inc * y_f_total
 

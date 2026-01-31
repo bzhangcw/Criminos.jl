@@ -1,81 +1,52 @@
-using UnoSolver, JuMP
+using JuMP, MadNLP
+using ForwardDiff, Optim
 
-function __policy_opt_sd(z, data, C, ϕ, p; obj_style=1)
-    # m = Model(MadNLP.Optimizer)
-    opt = optimizer_with_attributes(UnoSolver.Optimizer,
-        "output_flag" => false,
-        "preset" => "filtersqp",
-        "primal_tolerance" => 1e-5,
-        "dual_tolerance" => 1e-5,
-        "hessian_model" => "identity",
-    )
-    m = Model(opt)
+__optim_ipnewton = IPNewton(;
+    linesearch=Optim.backtrack_constrained_grad,
+    μ0=:auto,
+    show_linesearch=false
+)
+
+__get_options(tol=1e-4, verbose=true, store_trace=true) = Optim.Options(
+    f_abstol=tol,
+    g_abstol=tol,
+    iterations=1_000,
+    store_trace=store_trace,
+    show_trace=verbose,
+    show_every=5,
+    time_limit=100
+)
+
+function __policy_opt_grad_fp(z, data, C, ϕ, p; μ=1e-8, kwargs...)
     n = data[:n]
-    # columns labels: p0, f0, p1, f1
-    @variable(m, τv[1:n] >= 0)
-    set_upper_bound.(τv, 1.0)
-    # x, and y
-    @variable(m, xv[1:n, 1:4] >= 0) # x
-    @variable(m, yv[1:n, 1:4] >= 0)
-    @constraint(m, cap, sum(xv[:, 3]) <= C)
-    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(xv, yv, sum(yv) / (sum(xv) + 1e-5), data; τ=τv, p=p)
 
-    # fixed point constraints.
-    @constraint(m, xv[:, 1] .== x₊1)
-    @constraint(m, xv[:, 2] .== x₊2)
-    @constraint(m, xv[:, 3] .== x₊3)
-    @constraint(m, xv[:, 4] .== x₊4)
-    @constraint(m, yv[:, 1] .== y₊1)
-    @constraint(m, yv[:, 2] .== y₊2)
-    @constraint(m, yv[:, 3] .== y₊3)
-    @constraint(m, yv[:, 4] .== y₊4)
-    if obj_style == 1
-        @objective(m, Min, sum(yv))
-    elseif obj_style == 2
-        @objective(m, Min, sum(xv; dims=2)' * ϕ)
+    f(zv) = begin
+        xv = reshape(zv[1:4n], n, 4)
+        yv = reshape(zv[4n+1:8n], n, 4)
+        τv = zv[8n+1:9n]
+        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(xv, yv, sum(yv) / (sum(xv) + 1e-5), data; τ=τv, p=p)
+        return sum(y₊1) + sum(y₊2) + sum(y₊3) + sum(y₊4) - μ * log(C - sum(x₊3))
     end
-    optimize!(m)
-    τ₊ = value.(τv)
-    x₊ = value.(xv)
-    y₊ = value.(yv)
-    μ₊ = safe_ratio(sum(y₊), sum(x₊))
-    return τ₊, y₊, State(n, x₊, y₊, μ₊), nothing
-end
 
+    ∇f!(buffer, zv) = ForwardDiff.gradient!(buffer, f, zv)
 
-function __policy_opt_myopic(z, data, C, ϕ, p; obj_style=1, verbose=false)
-    # m = Model(MadNLP.Optimizer)
-    opt = optimizer_with_attributes(UnoSolver.Optimizer,
-        "output_flag" => true,
-        "preset" => "filtersqp",
-        "primal_tolerance" => 1e-5,
-        "dual_tolerance" => 1e-5,
-    )
-    m = Model(opt)
-    n = data[:n]
-    @variable(m, τv[1:n] >= 0)
-    set_upper_bound.(τv, 1.0)
-    # one-step lookahead
-    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(z.x, z.y, z.μ, data; τ=τv, p=p)
-    @constraint(m, cap, sum(x₊3) <= C)
+    lb = zeros(9n)
+    ub = ones(9n) .* 1e10
+    z₀ = ones(9n) .* 1e-2
 
-    if obj_style == 1
-        @objective(m, Min, sum(y₊1) + sum(y₊2) + sum(y₊3) + sum(y₊4))
-    else
-        throw(ValueError("obj_style must be 1"))
-    end
-    @info "optimization started"
-    optimize!(m)
-    @info "optimization finished"
-    τ₊ = value.(τv)
+    results = Optim.optimize(f, ∇f!, lb, ub, z₀, Optim.Fminbox(Optim.ConjugateGradient()), __get_options())
+
+    zs = results.minimizer
+    τ₊ = zs[8n+1:9n]
     z₊ = copy(z)
     Fc!(z, z₊, data; τ=τ₊, p=p)
 
     x₊ = z₊.x
     y₊ = z₊.y
     μ₊ = z₊.μ
-    return τ₊, y₊, z₊, nothing
+    return τ₊, y₊, State(n, x₊, y₊, μ₊), nothing
 end
+
 
 @doc """
     __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false)
@@ -129,10 +100,21 @@ function __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, as
 
     # Greedily assign treatment in priority order
     for v in sorted_idx
+        # Check if capacity is already exhausted
+        remaining_capacity = C - current_treated
+        if remaining_capacity <= 1e-10
+            break
+        end
+
         # Capacity consumed if we treat cohort v:
         # - existing p0 in v moves to p1: z.x[v, 1]
         # - new arrivals in v go to p1: data[:β][v]
         capacity_needed = z.x[v, 1] + data[:β][v]
+
+        if capacity_needed <= 1e-10
+            # Skip cohorts with zero capacity need
+            continue
+        end
 
         if current_treated + capacity_needed <= C
             τ₊[v] = 1.0
@@ -140,20 +122,18 @@ function __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, as
             if verbose
                 @info "Treating cohort $v: capacity used = $(current_treated) / $C"
             end
-        else
-            # Can we partially treat this cohort?
-            remaining_capacity = C - current_treated
-            if remaining_capacity > 0 && capacity_needed > 0
-                # Partial treatment: τ[v] = fraction that fits
-                τ₊[v] = remaining_capacity / capacity_needed
-                current_treated += remaining_capacity
-                if verbose
-                    @info "Partially treating cohort $v (τ=$(τ₊[v])): capacity used = $(current_treated) / $C"
-                end
+        elseif remaining_capacity > 0
+            # Partial treatment: τ[v] = fraction that fits
+            τ₊[v] = remaining_capacity / capacity_needed
+            current_treated += remaining_capacity
+            if verbose
+                @info "Partially treating cohort $v (τ=$(τ₊[v])): capacity used = $(current_treated) / $C"
             end
-            # No more capacity
+            # Capacity is now exhausted
             break
         end
+        # If this cohort doesn't fit at all and no partial treatment possible,
+        # continue to check remaining cohorts (they might be smaller and fit)
     end
 
     if verbose

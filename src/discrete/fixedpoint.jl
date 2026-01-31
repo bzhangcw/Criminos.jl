@@ -30,23 +30,30 @@ end
     - `p`: treatment effectiveness parameter
 
     # Treatment model:
-    Treatment is applied to BOTH existing p0 population AND new arrivals:
-    - τ[v] = probability that someone in cohort v receives treatment
-    - Existing p0: τ fraction moves to p1, (1-τ) stays in p0
-    - New arrivals β: τ fraction goes to p1, (1-τ) goes to p0
+    - `mode`: :new or :existing
+    - `mode` = :new: Treatment applies to NEW ARRIVALS ONLY (β):
+        - τ[v] = probability that new arrivals in cohort v receive treatment
+        - Existing p0: ALL stay in p0 (no treatment applied to existing)
+        - New arrivals β: τ fraction goes to p1, (1-τ) goes to p0
+    - `mode` = :existing: Treatment applies to BOTH existing p0 AND new arrivals:
+        - τ[v] = probability that someone in cohort v receives treatment
+        - Existing p0: τ fraction moves to p1, (1-τ) stays in p0
+        - New arrivals β: τ fraction goes to p1, (1-τ) goes to p0
 
     # Incarceration model:
     When someone reoffends (y), with probability δ_inc they are incarcerated and exit.
     Only (1-δ_inc) fraction of recidivists stay in the system and are routed via Py.
 """
 F(x, y, μ, data;
-    τ=zeros(data[:n]), p=ones(data[:n])
+    τ=zeros(data[:n]),
+    p=ones(data[:n]),
+    mode=:existing
 ) = begin
     n = data[:n]
     h₊ = data[:Fh](μ; p=p)
     φ₊ = data[:Fφ](h₊; p=p)
     # return rates from function call (depends on μ via h₊)
-    r = compute_return_rates_gl16(data, μ; p=p)
+    r = compute_return_rates(data, μ; p=p)
     r0 = r[0]
     r1 = r[1]
     # r0 = data[:r₀]
@@ -60,16 +67,29 @@ F(x, y, μ, data;
     γ_c = 1.0 .- data[:γ]
     σ_c = 1.0 .- data[:σ]
     τ_c = 1.0 .- τ
-    # Treatment assignment: applies to BOTH existing p0 population AND new arrivals
-    # τ[v] = probability that someone in cohort v receives treatment
-    # - Existing p0 population: τ fraction moves to p1, (1-τ) stays in p0
-    # - New arrivals β: τ fraction goes to p1, (1-τ) goes to p0
-    # p0: existing p0 who don't get treated + untreated new arrivals
-    xhalf1 = τ_c .* x[:, 1] + τ_c .* data[:β]
+
+    # Treatment assignment based on mode
+    if mode == :new
+        # Treatment applies to new arrivals ONLY
+        # Existing p0: ALL stay in p0 (untreated)
+        # New arrivals: τ fraction goes to p1, (1-τ) goes to p0
+        xhalf1 = x[:, 1] + τ_c .* data[:β]           # all existing p0 + untreated new arrivals
+        xhalf3 = x[:, 3] + τ .* data[:β]             # existing p1 + treated new arrivals
+    elseif mode == :existing
+        # Treatment applies to existing ONLY
+        xhalf1 = τ_c .* x[:, 1] + data[:β]  # untreated p0 + untreated new arrivals
+        xhalf3 = x[:, 3] + τ .* x[:, 1] # existing p1 + treated p0
+    elseif mode == :both
+        # Treatment applies to BOTH existing p0 (AND) new arrivals
+        # Existing p0: τ fraction moves to p1, (1-τ) stays in p0
+        # New arrivals: τ fraction goes to p1, (1-τ) goes to p0
+        xhalf1 = τ_c .* x[:, 1] + τ_c .* data[:β]    # untreated p0 + untreated new arrivals
+        xhalf3 = x[:, 3] + τ .* x[:, 1] + τ .* data[:β]  # existing p1 + treated p0 + treated new arrivals
+    else
+        throw(ArgumentError("mode must be :new, :existing, or :both, got $mode"))
+    end
     # f0: unchanged (treatment only applies to probation)
     xhalf2 = x[:, 2]
-    # p1: existing p1 + existing p0 who get treated + treated new arrivals
-    xhalf3 = x[:, 3] + τ .* x[:, 1] + τ .* data[:β]
     # f1: unchanged
     xhalf4 = x[:, 4]
 
@@ -103,8 +123,6 @@ F(x, y, μ, data;
     # Return from follow-up: r already accounts for competing risk, apply stay_frac
     b0 = data[:Py]' * (stay_frac .* r0 .* σ_c .* xhalf2 + stay_frac .* r0 .* data[:σ] .* y₊2)
     x₊1 += b0
-    # x₊1 .+= 0.0
-    # @info "r = $(sum(x₊1 + x₊2 - xhalf1 - xhalf2))"
     # p1
     x₊3 = data[:Px]' * (data[:γ] .* (xhalf3 - y₊3)) + data[:Py]' * (data[:γ] .* y_stay3)
     # f1
@@ -124,15 +142,17 @@ F(x, y, μ, data;
 end
 
 @doc """
-    compute_Psi_discrete(data, μ; τ=zeros(n), p=ones(n)) -> (Ψ, b, exit)
+    compute_Psi_discrete(data, μ; τ=zeros(n), p=ones(n), mode=:existing) -> (Ψ, b, exit)
 
 Build per-episode transition matrix Ψ (4n×4n), arrival contribution b (4n), and exit vector (4n).
 
 ## Treatment policy:
-Treatment is applied to BOTH existing p0 population AND new arrivals:
-- τ[v] = probability that someone in cohort v receives treatment
-- Existing p0: τ fraction moves to p1 (gets treated), (1-τ) stays in p0
-- New arrivals β: τ fraction goes to p1, (1-τ) goes to p0
+- `mode` = :new: Treatment applies to NEW ARRIVALS ONLY (β):
+    - Existing p0: ALL stay in p0 (Ψ matrix has no τ-dependent terms for p0→p1)
+    - New arrivals β: τ fraction goes to p1, (1-τ) goes to p0
+- `mode` = :existing: Treatment applies to BOTH existing p0 AND new arrivals:
+    - Existing p0: τ fraction moves to p1 (gets treated), (1-τ) stays in p0
+    - New arrivals β: τ fraction goes to p1, (1-τ) goes to p0
 
 ## Incarceration model:
 When someone reoffends, with probability δ_inc they are incarcerated and exit the system.
@@ -163,7 +183,7 @@ Returns:
 - b: 4n vector of contributions from new arrivals (β) after treatment split and routing
 - exit: 4n exit probability vector (incarceration from p-states, exit + incarceration from f-states)
 """
-function compute_Psi_discrete(data, μ; τ=zeros(data[:n]), p=ones(data[:n]))
+function compute_Psi_discrete(data, μ; τ=zeros(data[:n]), p=ones(data[:n]), mode=:existing)
     n = data[:n]
     # rates and complements
     γ = data[:γ]
@@ -210,39 +230,69 @@ function compute_Psi_discrete(data, μ; τ=zeros(data[:n]), p=ones(data[:n]))
     Z = spzeros(n, n)
 
     # contributions to x₊ from current x
-    # Treatment policy: τ fraction of p0 moves to p1, (1-τ) stays in p0
-    # This applies to existing p0 population, not just new arrivals
-    #
-    # After treatment split:
-    #   xhalf1 = τ_c * x[p0]  (untreated p0)
-    #   xhalf3 = x[p1] + τ * x[p0]  (existing p1 + newly treated from p0)
+    # Treatment policy depends on mode:
+    # - :new: only new arrivals get treated, existing p0 stays in p0
+    # - :existing: τ fraction of p0 moves to p1, (1-τ) stays in p0
     #
     # Survivors (1-φ) route via Px, recidivists who stay (φ*stay_frac) route via Py
 
-    # x₊1 blocks (p0 → p0): only τ_c fraction of p0 stays untreated
-    L11 = Dτc * (TpX * (Dγ * (I - Dφ0)) + TpY * (Dγ * Dφ0_stay))
-    L12 = TpY * (Dr0_stay * Dσc + Dr0_stay * (Dσ * Dφ0))
-    L13 = Z
-    L14 = Z
+    if mode == :new
+        # mode = :new: Treatment applies to NEW ARRIVALS ONLY
+        # Existing p0 ALL stays in p0 (no treatment applied)
+        # x₊1 blocks (p0 → p0): ALL p0 stays (no τ factor)
+        L11 = TpX * (Dγ * (I - Dφ0)) + TpY * (Dγ * Dφ0_stay)
+        L12 = TpY * (Dr0_stay * Dσc + Dr0_stay * (Dσ * Dφ0))
+        L13 = Z
+        L14 = Z
 
-    # x₊2 blocks (→ f0)
-    L21 = Dτc * (TpX * (Dγc * (I - Dφ0)) + TpY * (Dγc * Dφ0_stay))
-    L22 = TpX * (Dσ - Dσ * Dφ0)
-    L23 = Z
-    L24 = Z
+        # x₊2 blocks (→ f0)
+        L21 = TpX * (Dγc * (I - Dφ0)) + TpY * (Dγc * Dφ0_stay)
+        L22 = TpX * (Dσ - Dσ * Dφ0)
+        L23 = Z
+        L24 = Z
 
-    # x₊3 blocks (→ p1): includes τ fraction of p0 that gets treated
-    # From p0: τ fraction gets treated, then goes through p1 dynamics (using φ1)
-    L31 = Dτ * (TpX * (Dγ * (I - Dφ1)) + TpY * (Dγ * Dφ1_stay))
-    L32 = Z
-    L33 = TpX * (Dγ - Dγ * Dφ1) + TpY * (Dγ * Dφ1_stay)
-    L34 = TpY * (Dr1_stay * Dσc + Dr1_stay * (Dσ * Dφ1))
+        # x₊3 blocks (→ p1): NO p0 → p1 transition (only new arrivals get treated)
+        L31 = Z
+        L32 = Z
+        L33 = TpX * (Dγ - Dγ * Dφ1) + TpY * (Dγ * Dφ1_stay)
+        L34 = TpY * (Dr1_stay * Dσc + Dr1_stay * (Dσ * Dφ1))
 
-    # x₊4 blocks (→ f1)
-    L41 = Dτ * (TpX * (Dγc * (I - Dφ1)) + TpY * (Dγc * Dφ1_stay))
-    L42 = Z
-    L43 = TpX * (Dγc - Dγc * Dφ1) + TpY * (Dγc * Dφ1_stay)
-    L44 = TpX * (Dσ - Dσ * Dφ1)
+        # x₊4 blocks (→ f1)
+        L41 = Z
+        L42 = Z
+        L43 = TpX * (Dγc - Dγc * Dφ1) + TpY * (Dγc * Dφ1_stay)
+        L44 = TpX * (Dσ - Dσ * Dφ1)
+
+    elseif mode == :existing
+        # mode = :existing: Treatment applies to BOTH existing p0 AND new arrivals
+        # x₊1 blocks (p0 → p0): only τ_c fraction of p0 stays untreated
+        L11 = Dτc * (TpX * (Dγ * (I - Dφ0)) + TpY * (Dγ * Dφ0_stay))
+        L12 = TpY * (Dr0_stay * Dσc + Dr0_stay * (Dσ * Dφ0))
+        L13 = Z
+        L14 = Z
+
+        # x₊2 blocks (→ f0)
+        L21 = Dτc * (TpX * (Dγc * (I - Dφ0)) + TpY * (Dγc * Dφ0_stay))
+        L22 = TpX * (Dσ - Dσ * Dφ0)
+        L23 = Z
+        L24 = Z
+
+        # x₊3 blocks (→ p1): includes τ fraction of p0 that gets treated
+        # From p0: τ fraction gets treated, then goes through p1 dynamics (using φ1)
+        L31 = Dτ * (TpX * (Dγ * (I - Dφ1)) + TpY * (Dγ * Dφ1_stay))
+        L32 = Z
+        L33 = TpX * (Dγ - Dγ * Dφ1) + TpY * (Dγ * Dφ1_stay)
+        L34 = TpY * (Dr1_stay * Dσc + Dr1_stay * (Dσ * Dφ1))
+
+        # x₊4 blocks (→ f1)
+        L41 = Dτ * (TpX * (Dγc * (I - Dφ1)) + TpY * (Dγc * Dφ1_stay))
+        L42 = Z
+        L43 = TpX * (Dγc - Dγc * Dφ1) + TpY * (Dγc * Dφ1_stay)
+        L44 = TpX * (Dσ - Dσ * Dφ1)
+
+    else
+        throw(ArgumentError("mode must be :new, :existing, or :both, got $mode"))
+    end
 
     # assemble 4n x 4n sparse block matrix
     row1 = hcat(L11, L12, L13, L14)
@@ -292,8 +342,8 @@ function compute_Psi_discrete(data, μ; τ=zeros(data[:n]), p=ones(data[:n]))
     return Ψ, b, exit
 end
 
-Fc!(z, z₊, data; τ=zeros(data[:n]), p=ones(data[:n]), validate=false) = begin
-    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(z.x, z.y, z.μ, data; τ=τ, p=p)
+Fc!(z, z₊, data; τ=zeros(data[:n]), p=ones(data[:n]), mode=:existing, validate=false) = begin
+    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(z.x, z.y, z.μ, data; τ=τ, p=p, mode=mode)
     z₊.x[:, 1] .= x₊1
     z₊.x[:, 2] .= x₊2
     z₊.x[:, 3] .= x₊3
@@ -306,7 +356,7 @@ Fc!(z, z₊, data; τ=zeros(data[:n]), p=ones(data[:n]), validate=false) = begin
     # validate this using Ψ
     if validate
         x_vec = [z.x[:, 1]; z.x[:, 2]; z.x[:, 3]; z.x[:, 4]]
-        _Ψ, b, _exit = compute_Psi_discrete(data, z.μ; τ=τ, p=p)
+        _Ψ, b, _exit = compute_Psi_discrete(data, z.μ; τ=τ, p=p, mode=mode)
         xΨ_vec = _Ψ * x_vec + b
         n = data[:n]
         xΨ = [xΨ_vec[1:n] xΨ_vec[n+1:2n] xΨ_vec[2n+1:3n] xΨ_vec[3n+1:4n]]

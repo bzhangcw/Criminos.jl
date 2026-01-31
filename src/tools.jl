@@ -1,6 +1,65 @@
 using LinearAlgebra, SparseArrays, Arpack
 using Plots, JSON
 
+# Policy visualization constants
+# Colors for different policies
+const POLICY_COLORS = Dict(
+    "null" => "#7f7f7f",           # gray
+    "random" => "#9467bd",         # purple
+    # ------------------------------------------------------------
+    # priority policies; will exhaust the capacity
+    # ------------------------------------------------------------
+    "high-risk" => "#d62728",      # red
+    "low-risk" => "#546de5",       # blue
+    "high-risk-cutoff" => "#e377c2",        # pink
+    "high-risk-only-young" => "#e377c2",    # pink
+    "high-risk-lean-young" => "#2ca02c",    # green
+    "age-tolerance" => "#17becf",           # cyan
+    "age-first" => "#51a3e6",               # soft blue
+    "age-first-high-risk" => "#e67051",     # soft red
+    "high-risk-young-first" => "#e377c2",   # soft red
+    # ------------------------------------------------------------
+    # fluid policies; may not exhaust the capacity
+    # ------------------------------------------------------------
+    "fluid-low-age-low-prev" => "#1f77b4",              # blue
+    "fluid-low-age-threshold-offenses" => "#2ca02c",   # green
+)
+
+# Policy name aliases
+const POLICY_ALIAS = Dict(
+    "age-first" => "age-first-low-risk",
+)
+
+# Hatch patterns for legend: policies starting with "age-" get dashed pattern
+# See PGFPlotsX patterns
+const POLICY_HATCHES = Dict(
+    "age-tolerance" => "//",
+    "age-first" => "//",
+    "age-first-high-risk" => "//",
+    "fluid-low-age-low-prev" => "//",
+    "fluid-low-age-threshold-offenses" => "//",
+)
+
+# Line styles for plotting series
+# Plots.jl styles: :solid, :dash, :dot, :dashdot, :dashdotdot
+const POLICY_LINESTYLES = Dict(
+    "age-tolerance" => :dash,
+    "age-first" => :dash,
+    "age-first-high-risk" => :dash,
+    "high-risk-young-first" => :dash,
+    "fluid-low-age-low-prev" => :dash,
+    "fluid-low-age-threshold-offenses" => :dash,
+)
+
+# Helper function to get policy color with fallback
+get_policy_color(policy::String) = get(POLICY_COLORS, policy, "#333333")
+
+# Helper function to get policy linestyle with fallback
+get_policy_linestyle(policy::String) = get(POLICY_LINESTYLES, policy, :solid)
+
+# Helper function to get policy display name (applying aliases)
+get_policy_name(policy::String) = get(POLICY_ALIAS, policy, policy)
+
 switch_to_pdf = () -> begin
     pgfplotsx()
     format = "pdf"
