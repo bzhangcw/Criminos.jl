@@ -192,7 +192,7 @@ def treatment_rule_random(candidates, remaining_capacity, **kwargs):
 def treatment_effect_type_1(row, med=-0.3604, mt_high=TR_HIGH, mt_low=TR_LOW):
     """
     Heterogeneous treatment effect based on individual characteristics.
-        "higher score than current risk score, less treatment effect."
+        "higher score than "current mean", less treatment effect."
         "H vs. L., baseline = -0.3425"
     Args:
         row: pandas Series representing an individual's data
@@ -209,7 +209,7 @@ def treatment_effect_type_1(row, med=-0.3604, mt_high=TR_HIGH, mt_low=TR_LOW):
 def treatment_effect_type_2(row, med=-0.3604, mt_high=0.1, mt_low=6.0):
     """
     Heterogeneous treatment effect based on individual characteristics.
-      "higher state score than the initial mean, less treatment effect."
+      "higher state score than the "initial mean", less treatment effect."
     Args:
         row: pandas Series representing an individual's data
 
