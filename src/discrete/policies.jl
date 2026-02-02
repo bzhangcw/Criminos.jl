@@ -49,7 +49,7 @@ end
 
 
 @doc """
-    __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false)
+    __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, mode=:existing)
 
 Priority-based treatment assignment policy.
 
@@ -60,15 +60,14 @@ capacity C is exhausted. The capacity constraint is on the treated population in
 - obj_style=1: prioritize by recidivism risk φ (higher risk → higher priority)
 - obj_style=2: prioritize by ϕ (user-provided priority weights, higher ϕ → higher priority)
 
-# Capacity consumption:
-When τ[v] = 1 for cohort v, the capacity consumed is:
-- Existing p0 population: x[v, 1]
-- New arrivals: β[v]
-- Plus existing p1 population: x[v, 3] (already treated)
+# Treatment mode:
+- mode=:existing: treatment applies to existing p0 only, capacity = x[v, 1]
+- mode=:new: treatment applies to new arrivals only, capacity = β[v]
+- mode=:both: treatment applies to both, capacity = x[v, 1] + β[v]
 
 The algorithm greedily assigns τ[v] = 1 until adding another cohort would exceed C.
 """
-function __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, ascending=false)
+function __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, ascending=false, mode=:existing)
     n = data[:n]
 
     # Compute recidivism probabilities for priority ranking
@@ -106,10 +105,16 @@ function __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, as
             break
         end
 
-        # Capacity consumed if we treat cohort v:
-        # - existing p0 in v moves to p1: z.x[v, 1]
-        # - new arrivals in v go to p1: data[:β][v]
-        capacity_needed = z.x[v, 1] + data[:β][v]
+        # Capacity consumed if we treat cohort v (depends on mode):
+        if mode == :existing
+            capacity_needed = z.x[v, 1]  # existing p0 only
+        elseif mode == :new
+            capacity_needed = data[:β][v]  # new arrivals only
+        elseif mode == :both
+            capacity_needed = z.x[v, 1] + data[:β][v]  # both
+        else
+            throw(ArgumentError("mode must be :existing, :new, or :both, got $mode"))
+        end
 
         if capacity_needed <= 1e-10
             # Skip cohorts with zero capacity need
@@ -143,7 +148,7 @@ function __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, as
 
     # Apply treatment and compute next state
     z₊ = copy(z)
-    Fc!(z, z₊, data; τ=τ₊, p=p)
+    Fc!(z, z₊, data; τ=τ₊, p=p, mode=mode)
 
     y₊ = z₊.y
     return τ₊, y₊, z₊, nothing

@@ -28,6 +28,7 @@ export visualize_results, visualize_state, visualize_matrix, visualize_vector
 function run(z₀, data;
     fτ=nothing,
     p=zeros(data[:n]),
+    mode=:existing,  # :existing, :new, or :both
     max_iter=5000,
     verbose=false,
     validate=false,
@@ -42,7 +43,7 @@ function run(z₀, data;
     while true
         τ₊, _... = isnothing(fτ) ? (zeros(n), nothing) : fτ(z)
         z₊ = copy(z)
-        Fc!(z, z₊, data; τ=τ₊, p=p, validate=validate)
+        Fc!(z, z₊, data; τ=τ₊, p=p, mode=mode, validate=validate)
         ϵ = z_diff(z₊, z)
         z = z₊
         # @info "" z.x z.y z.μ

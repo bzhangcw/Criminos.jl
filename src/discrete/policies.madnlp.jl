@@ -3,12 +3,32 @@ using ADNLPModels
 solver = MadNLPHSL.Ma57Solver
 
 @doc raw"""
-    __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1)
+    __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=true, max_wall_time=500.0, accuracy=1e-4, τ₀=nothing, mode=:existing)
 
 Steady-state optimization using ADNLPModels directly (no JuMP).
-Variables: [τ (n), x (4n), y (4n)] = 9n total
+
+# Variables
+- τ (n): treatment assignment
+- x (4n): population state [p0, f0, p1, f1]
+- y (4n): reoffense counts
+- Total: 9n variables
+
+# Arguments
+- `z`: current state
+- `data`: problem data
+- `C`: capacity constraint
+- `ϕ`: priority weights (for obj_style=2)
+- `p`: treatment effect parameter
+- `obj_style`: 1 = min sum(y), 2 = min sum(x)' * ϕ
+- `mode`: treatment mode (:existing, :new, or :both)
+
+# Returns
+- `τ₊`: optimal treatment assignment
+- `y₊`: resulting reoffense counts
+- `z₊`: resulting state
+- `stats`: solver statistics
 """
-function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=true, max_wall_time=500.0, accuracy=1e-4, τ₀=nothing)
+function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=true, max_wall_time=500.0, accuracy=1e-4, τ₀=nothing, mode=:existing)
     n = data[:n]
     nvar = 9n  # τ (n) + x (4n) + y (4n)
     ncon = 8n + 1  # fixed point constraints (8n) + capacity (1)
@@ -57,7 +77,7 @@ function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=tr
         μ = sum(yv) / (sum(xv) + 1e-8)
 
         # Compute F
-        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(xv, yv, μ, data; τ=τv, p=p)
+        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(xv, yv, μ, data; τ=τv, p=p, mode=mode)
 
         # Fixed point constraints: x == F_x, y == F_y
         c[1:n] .= xv[:, 1] .- x₊1
@@ -107,6 +127,15 @@ function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=tr
     return τ₊, y₊, State(n, x₊, y₊, μ₊), stats
 end
 
+@doc raw"""
+    __policy_opt_sd_madnlp_jump(z, data, C, ϕ, p; obj_style=1)
+
+Steady-state optimization using JuMP + MadNLP.
+
+# Note
+This is a slower alternative to `__policy_opt_sd_madnlp_adnlp` that uses JuMP for model formulation.
+Does not support `mode` parameter (uses default treatment assignment).
+"""
 function __policy_opt_sd_madnlp_jump(z, data, C, ϕ, p; obj_style=1)
     m = Model(MadNLP.Optimizer)
     n = data[:n]
@@ -158,6 +187,16 @@ end
 
 
 
+@doc raw"""
+    __policy_opt_myopic_madnlp(z, data, C, ϕ, p; obj_style=1, verbose=false)
+
+Myopic (one-step lookahead) optimization using JuMP + MadNLP.
+
+Optimizes treatment for the next period only, without considering long-term steady-state effects.
+
+# Note
+Does not support `mode` parameter (uses default treatment assignment).
+"""
 function __policy_opt_myopic_madnlp(z, data, C, ϕ, p; obj_style=1, verbose=false)
     m = Model(MadNLP.Optimizer)
     n = data[:n]
@@ -196,11 +235,19 @@ function __policy_opt_myopic_madnlp(z, data, C, ϕ, p; obj_style=1, verbose=fals
     return τ₊, y₊, z₊, nothing
 end
 
-"""
+@doc raw"""
     __policy_opt_myopic_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=false)
 
 Myopic (one-step lookahead) optimization using ADNLPModels directly (no JuMP).
-Variables: τ (n)
+
+Optimizes treatment for the next period only, without considering long-term steady-state effects.
+This is faster than `__policy_opt_myopic_madnlp` as it uses ADNLPModels directly.
+
+# Variables
+- τ (n): treatment assignment
+
+# Note
+Does not support `mode` parameter (uses default treatment assignment).
 """
 function __policy_opt_myopic_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=false)
     n = data[:n]

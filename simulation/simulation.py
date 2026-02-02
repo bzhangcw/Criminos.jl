@@ -276,7 +276,7 @@ class Simulator(object):
         "treat_start",  # the time when the treatment started
         "treat_end",  # the time when the treatment ended
         "bool_treat",  # whether the individual is in treatment
-        "bool_treat_made",  # whether the treatment decision (either 0 or 1) has been made
+        "bool_decision_made",  # whether the treatment decision (either 0 or 1) has been made
         "ep_arrival",  # episode of arrival
         "ep_leaving",  # episode of leaving
         "ep_return",  # episode of most recent return (EVENT_RETURN)
@@ -640,6 +640,8 @@ class Simulator(object):
                     else:
                         # return can be treated?
                         dfi.at[idx, "bool_can_be_treated"] = bool_return_can_be_treated
+                        # if return, the decision is not made yet (refreshed)
+                        dfi.at[idx, "bool_decision_made"] = 0
 
                     # Batch assign common columns
                     dfi.at[idx, "arrival"] = t
@@ -945,13 +947,14 @@ class Simulator(object):
                             **func_treatment_kwargs,
                             t=t,
                         )
+                        # whenever you are selected or not, the decision is final for this probation term.
+                        dfi["bool_decision_made"] = 1
                         # Apply treatment effect to scores
                         # Since S(t|score) = S0(t)^exp(score) and higher score means more dangerous:
                         # - Higher score → exp(score) larger → S(t) smaller (since 0<S0<1) → higher offense
                         # To reduce offense, we need to lower the score:
                         # If treatment_effect = 0.5: score + log(0.5) = score - 0.693
                         # → Lower score → Higher survival → Lower offense ✓
-                        dfi["bool_treat_made"] = 1
                         # @median defined as people selected?
                         # _global_median_score = dfi.loc[idx_selected, "score"].median()
                         _global_median_score = people_qualifying["score"].median()

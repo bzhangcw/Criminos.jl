@@ -28,7 +28,10 @@ from tqdm.auto import tqdm
 import simulation, sirakaya
 
 # Import what we need from simulation_setup
-from simulation_setup import SimulationSetup, get_tests, default_settings
+from simulation_setup import (
+    SimulationSetup, get_tests, default_settings,
+    QUAL_STRING_ANYTIME, QUAL_STRING_ENTRY_ONLY,
+)
 from simulation_summary import *
 import simulation_treatment as smt
 
@@ -135,6 +138,13 @@ def create_parser():
         type=int,
         default=default_settings.max_returns,
         help="Maximum number of returns allowed",
+    )
+    treat_group.add_argument(
+        "--treatment_timing",
+        type=str,
+        choices=["upon_arrival", "anytime"],
+        default=default_settings.treatment_timing,
+        help="When treatment can be assigned: 'upon_arrival' (only at entry to probation) or 'anytime' (during probation)",
     )
     treat_group.add_argument(
         "--max_offenses",
@@ -324,6 +334,13 @@ if __name__ == "__main__":
     settings.max_returns = args.max_returns
     settings.treatment_capacity = args.treatment_capacity
     settings.treatment_dosage = args.treatment_dosage
+
+    # Set treatment timing mode
+    settings.treatment_timing = args.treatment_timing
+    settings.str_qualifying_for_treatment = (
+        QUAL_STRING_ENTRY_ONLY if args.treatment_timing == "upon_arrival"
+        else QUAL_STRING_ANYTIME
+    )
 
     # Convert treatment_effect arg to a callable
     if args.treatment_effect == "type-1":

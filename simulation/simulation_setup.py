@@ -28,6 +28,23 @@ import simulation_treatment as smt
 import sirakaya
 import input
 
+# here we will implicit allow treatment in the middle of the probation
+QUAL_STRING_ANYTIME = (
+    "bool_left == 0 "
+    + "& stage == 'p'"
+    + "& bool_can_be_treated == 1"
+    + "& has_been_treated == 0"
+)
+# here we will only allow treatment upon arrival to probation
+# this means, the decision is not made yet
+QUAL_STRING_ENTRY_ONLY = (
+    "bool_left == 0 "
+    + "& stage == 'p'"
+    + "& bool_can_be_treated == 1"
+    + "& has_been_treated == 0"
+    + "& bool_decision_made == 0"
+)
+
 
 class SimulationSetup:
     """Configuration class for simulation parameters."""
@@ -74,12 +91,15 @@ class SimulationSetup:
         # Treatment eligibility and enrollment settings
         self.max_returns = 25
         self.max_offenses = 25
+        # @note: decide who can be sent to treatment
+        # treatment_timing: "upon_arrival" (default) or "anytime"
+        self.treatment_timing = "upon_arrival"
         self.str_qualifying_for_treatment = (
-            "bool_left == 0 "
-            + "& stage == 'p'"
-            + "& bool_can_be_treated == 1"
-            + "& has_been_treated == 0"
+            QUAL_STRING_ENTRY_ONLY
+            if self.treatment_timing == "upon_arrival"
+            else QUAL_STRING_ANYTIME
         )
+        # @note: decide who is currently enrolled in treatment
         self.str_current_enroll = "bool_left == 0 & bool_treat == 1 & stage == 'p'"
 
         # Boolean flags
