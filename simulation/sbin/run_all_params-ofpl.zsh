@@ -13,14 +13,14 @@ echo "Generating commands for $repeat repeats starting from repeation number $st
 # policies=(null random high-risk low-risk high-risk-only-young age-first age-tolerance)
 # policies=(high-risk age-tolerance high-risk-only-young)
 # policies=(null random high-risk low-risk)
-# policies=(null high-risk low-risk age-first)
-policies=(high-risk-cutoff)
+policies=(null high-risk low-risk age-first)
+# policies=(high-risk-cutoff)
 # policies=(null high-risk low-risk age-first)
 # policies=(age-first-high-risk)
 
 scale_factors=(0.05 0.1 0.2 0.3 0.4 0.5 0.7 0.9 1.0)
-# term_lengths=(500 1000 1500 2000)
-term_lengths=(1000)
+term_lengths=(500 1000 1500 2000)
+# term_lengths=(1000)
 
 
 # Generate commands to cmd.sh
@@ -59,5 +59,5 @@ done
 
 echo "Commands generated in cmd.sh."
 echo "see:  $output/cmd.sh"
-echo 'parallel run with: \
-cat $output/cmd.sh | xargs -I {} -P 30 bash -c "{}" &'
+echo "parallel run with: \n
+cat $output/cmd.sh | xargs -I {} -P 30 bash -c \"{}\" &"

@@ -8,7 +8,7 @@ This script demonstrates how to:
 4. Generate plots for all metrics
 """
 
-from sensanaly_prscale import analyze_sensitivity, plot_all_term_lengths
+from .sensanaly_prscale import analyze_sensitivity, plot_all_term_lengths
 import pandas as pd
 import os
 import sys

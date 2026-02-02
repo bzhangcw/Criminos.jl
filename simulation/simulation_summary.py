@@ -417,9 +417,6 @@ def add_to_metrics(all_metrics, agg_metrics, k, simulators, p_freeze, windowsize
     return all_metrics, agg_metrics
 
 
-from simulation_stats_test import *
-
-
 # ------------------------------------------------------------
 # plot metrics from all_metrics, which is a dict of results
 # ------------------------------------------------------------
