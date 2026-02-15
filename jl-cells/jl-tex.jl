@@ -4,13 +4,13 @@
 using LaTeXStrings
 
 # Policy labels (matching \polnul, \pollow, \polhigh, \polsd)
-const TEX_POL_NULL = L"\texttt{null}"
-const TEX_POL_LOW = L"\texttt{low}"
-const TEX_POL_HIGH = L"\texttt{high}"
-const TEX_POL_SD = L"\texttt{sd}"
+TEX_POL_NULL = L"\texttt{null}"
+TEX_POL_LOW = L"\texttt{low-risk}"
+TEX_POL_HIGH = L"\texttt{high-risk}"
+TEX_POL_SD = L"\texttt{eo}"
 
 # Dictionary for easy lookup
-const TEX_POLICY_LABELS = Dict(
+TEX_POLICY_LABELS = Dict(
     "null" => TEX_POL_NULL,
     "low-risk" => TEX_POL_LOW,
     "high-risk" => TEX_POL_HIGH,

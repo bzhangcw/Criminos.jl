@@ -29,7 +29,7 @@ Steady-state optimization using ADNLPModels directly (no JuMP).
 - `z₊`: resulting state
 - `stats`: solver statistics
 """
-function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=true, max_wall_time=500.0, accuracy=1e-4, τ₀=nothing, mode=:existing)
+function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=true, max_wall_time=500.0, accuracy=1e-4, τ₀=nothing, mode=:uponentry)
     n = data[:n]
     nvar = 10n  # τ (n) + x (4n) + y (4n) + b (n)
     ncon = 9n + 1  # fixed point constraints (8n) + b constraint (n) + capacity (1)
@@ -80,8 +80,8 @@ function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=tr
         # Compute μ
         μ = sum(yv) / (sum(xv) + 1e-8)
 
-        # Compute F (b₀ is the 9th return, xhalf is the 10th)
-        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b₀, xhalf = F(xv, yv, bv, μ, data; τ=τv, p=p, mode=mode)
+        # Compute F (b₀ is the 9th return, xhalf is the 10th, q is the 11th)
+        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b₀, xhalf, _ = F(xv, yv, bv, μ, data; τ=τv, p=p, mode=mode)
 
         # Fixed point constraints: x == F_x, y == F_y
         c[1:n] .= xv[:, 1] .- x₊1
@@ -94,6 +94,8 @@ function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=tr
         c[7n+1:8n] .= yv[:, 4] .- y₊4
 
         # Fixed point constraint for b: b == b₀
+        # this is not needed because b is already in x[:, 1] from previous dynamics
+        # redundant constraint
         c[8n+1:9n] .= bv .- b₀
 
         # Capacity constraint: sum(x_p1) ≤ C  =>  sum(x_p1) - C ≤ 0
@@ -133,7 +135,18 @@ function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=tr
     b₊ = sol[idx_b]
     μ₊ = safe_ratio(sum(y₊), sum(x₊))
 
-    return τ₊, y₊, State(n, x₊, y₊, μ₊; b=b₊), stats
+    # post processing
+    # compute qualified inflow 
+    if mode == :new
+        q₊ = data[:β]
+    elseif mode == :uponentry
+        q₊ = data[:β] + b₊
+    else
+        throw(ArgumentError("mode must be :new, :uponentry, got $mode"))
+    end
+    # if q = 0 then set τ = 0
+    τ₊ .*= (q₊ .> 1e-2)
+    return τ₊, y₊, State(n, x₊, y₊, μ₊; b=b₊, q=q₊), stats
 end
 
 @doc raw"""
@@ -159,7 +172,7 @@ function __policy_opt_sd_madnlp_jump(z, data, C, ϕ, p; obj_style=1)
     @variable(m, bv[1:n] >= 0)      # b (untreated returns)
     @constraint(m, cap, sum(xv[:, 3]) <= C)
     μv = sum(yv) / (sum(xv) + 1e-5)
-    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b₀, xhalf = F(xv, yv, bv, μv, data; τ=τv, p=p)
+    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b₀, xhalf, _ = F(xv, yv, bv, μv, data; τ=τv, p=p)
 
     # fixed point constraints.
     @constraint(m, xv[:, 1] .== x₊1)
@@ -197,7 +210,11 @@ function __policy_opt_sd_madnlp_jump(z, data, C, ϕ, p; obj_style=1)
     b₊ = stats.solution[9n+1:10n]
 
     μ₊ = safe_ratio(sum(y₊), sum(x₊))
-    return τ₊, y₊, State(n, x₊, y₊, μ₊; b=b₊), nothing
+
+    # Note: this deprecated function doesn't support mode parameter, assume :new
+    q₊ = data[:β]
+
+    return τ₊, y₊, State(n, x₊, y₊, μ₊; b=b₊, q=q₊), nothing
 end
 
 
@@ -218,7 +235,7 @@ function __policy_opt_myopic_madnlp(z, data, C, ϕ, p; obj_style=1, verbose=fals
     @variable(m, τv[1:n] >= 0)
     set_upper_bound.(τv, 1.0)
     # one-step lookahead
-    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, _, _ = F(z.x, z.y, z.b, z.μ, data; τ=τv, p=p)
+    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, _, _, _ = F(z.x, z.y, z.b, z.μ, data; τ=τv, p=p)
     @constraint(m, cap, sum(x₊3) <= C)
 
     if obj_style == 1
@@ -284,13 +301,13 @@ function __policy_opt_myopic_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbos
 
     # Objective: min sum(y₊) where y₊ = F_y(x, y, μ; τ)
     function obj(τv)
-        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, _, _ = F(x_curr, y_curr, b_curr, μ_curr, data; τ=τv, p=p)
+        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, _, _, _ = F(x_curr, y_curr, b_curr, μ_curr, data; τ=τv, p=p)
         return sum(y₊1) + sum(y₊2) + sum(y₊3) + sum(y₊4)
     end
 
     # Constraint: sum(x₊3) ≤ C  =>  sum(x₊3) - C ≤ 0
     function con!(c, τv)
-        x₊1, x₊2, x₊3, x₊4, _, _, _, _, _, _ = F(x_curr, y_curr, b_curr, μ_curr, data; τ=τv, p=p)
+        x₊1, x₊2, x₊3, x₊4, _, _, _, _, _, _, _ = F(x_curr, y_curr, b_curr, μ_curr, data; τ=τv, p=p)
         c[1] = sum(x₊3) - C
         return c
     end

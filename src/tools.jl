@@ -23,6 +23,10 @@ const POLICY_COLORS = Dict(
     # ------------------------------------------------------------
     "fluid-low-age-low-prev" => "#1f77b4",              # blue
     "fluid-low-age-threshold-offenses" => "#2ca02c",   # green
+    # ------------------------------------------------------------
+    # optimization policies
+    # ------------------------------------------------------------
+    "steady-state" => "#2ca02c",                        # green
 )
 
 # Policy name aliases

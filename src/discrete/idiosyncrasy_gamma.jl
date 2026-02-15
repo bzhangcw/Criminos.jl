@@ -18,7 +18,8 @@ Requires GL quadrature for integration.
 struct GammaIdiosyncrasy <: AbstractIdiosyncrasy
     k::Float64
     θ::Float64
-    GammaIdiosyncrasy(k::Float64=3.97, θ::Float64=2.05) = new(k, θ)
+    name::Symbol
+    GammaIdiosyncrasy(k::Float64=3.97, θ::Float64=2.05) = new(k, θ, :gamma)
 end
 
 function create_Fφ(idio::GammaIdiosyncrasy, η::Real, n::Int)

@@ -31,7 +31,8 @@ No individual idiosyncrasy - all individuals have the same intercept α_i = α�
 """
 struct ConstantIdiosyncrasy <: AbstractIdiosyncrasy
     α₀::Float64
-    ConstantIdiosyncrasy(α₀::Float64=3.97 / 2.05) = new(α₀)
+    name::Symbol
+    ConstantIdiosyncrasy(α₀::Float64=3.97 / 2.05) = new(α₀, :constant)
 end
 
 # ------------------------------------------------------------

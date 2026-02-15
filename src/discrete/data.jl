@@ -41,15 +41,19 @@ function generate_random_data(
     η = η_coeff * T_e # not strictly matching the fitting
     # arrivals per episode (rename to beta to avoid confusion with recidivism hazards)
     if style_λ == :uniform
-        β_arr = λ_coeff * T_e .* [j <= 25 && a <= 2 ? 1.0 : 0.0 for (j, a) in V]
+        β_arr = λ_coeff * T_e .* [j <= 25 && a <= 6 ? 1.0 : 0.0 for (j, a) in V]
     elseif style_λ == :j_0_only
         β_arr = λ_coeff * T_e .* [j == 0 ? 1.0 : 0.0 for (j, a) in V]
     elseif style_λ == :j_high_only
         β_arr = λ_coeff * T_e .* [j >= 5 ? 1.0 : 0.0 for (j, a) in V]
+    elseif style_λ == :j_low_only
+        β_arr = λ_coeff * T_e .* [j <= 2 ? 1.0 : 0.0 for (j, a) in V]
     elseif style_λ == :age_1_only
         β_arr = λ_coeff * T_e .* [a == 1 ? 1.0 : 0.0 for (j, a) in V]
     elseif style_λ == :special
-        β_arr = λ_coeff * T_e .* [j <= 10 && a <= 3 ? 1.0 : 0.0 for (j, a) in V]
+        β_arr = λ_coeff * T_e .* [j <= 6 && a <= 1 ? 1.0 : 0.0 for (j, a) in V]
+    elseif style_λ == :special_2
+        β_arr = λ_coeff * T_e .* [j <= 5 && a <= 3 ? 1.0 : 0.0 for (j, a) in V]
     else
         error("Unknown style_λ: $style_λ. Use :uniform or :decreasing.")
     end

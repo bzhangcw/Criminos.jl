@@ -58,31 +58,36 @@ F(x, y, b, μ, data;
     γ_c = 1.0 .- data[:γ]
     σ_c = 1.0 .- data[:σ]
     τ_c = 1.0 .- τ
+    q = zeros(n)
 
     # Treatment assignment based on mode
     if mode == :new
         # Treatment applies to new arrivals ONLY
         # Existing p0: ALL stay in p0 (untreated)
         # New arrivals: τ fraction goes to p1, (1-τ) goes to p0
+        q .= data[:β]
         xhalf1 = x[:, 1] + τ_c .* data[:β]           # all existing p0 + untreated new arrivals
         xhalf3 = x[:, 3] + τ .* data[:β]             # existing p1 + treated new arrivals
-    elseif mode == :existing
-        # Treatment applies to existing ONLY
-        xhalf1 = τ_c .* x[:, 1] + data[:β]  # untreated p0 + untreated new arrivals
-        xhalf3 = x[:, 3] + τ .* x[:, 1] # existing p1 + treated p0
-    elseif mode == :both
-        # Treatment applies to BOTH existing p0 (AND) new arrivals
-        # Existing p0: τ fraction moves to p1, (1-τ) stays in p0
-        # New arrivals: τ fraction goes to p1, (1-τ) goes to p0
-        xhalf1 = τ_c .* x[:, 1] + τ_c .* data[:β]    # untreated p0 + untreated new arrivals
-        xhalf3 = x[:, 3] + τ .* x[:, 1] + τ .* data[:β]  # existing p1 + treated p0 + treated new arrivals
+    # ------------------------------------------------------------
+    # @deprecated: will not use them, they allow treatment in mid-of-probation
+    # ------------------------------------------------------------
+    # elseif mode == :existing
+    #     # Treatment applies to existing ONLY
+    #     xhalf1 = τ_c .* x[:, 1] + data[:β]  # untreated p0 + untreated new arrivals
+    #     xhalf3 = x[:, 3] + τ .* x[:, 1] # existing p1 + treated p0
+    # elseif mode == :both
+    #     # Treatment applies to BOTH existing p0 (AND) new arrivals
+    #     # Existing p0: τ fraction moves to p1, (1-τ) stays in p0
+    #     # New arrivals: τ fraction goes to p1, (1-τ) goes to p0
+    #     xhalf1 = τ_c .* x[:, 1] + τ_c .* data[:β]    # untreated p0 + untreated new arrivals
+    #     xhalf3 = x[:, 3] + τ .* x[:, 1] + τ .* data[:β]  # existing p1 + treated p0 + treated new arrivals
     elseif mode == :uponentry
         # Treatment upon entry (eq.entry.assign)
         # b (untreated returns) is already in x[:,1] from previous dynamics
         # Divert τ fraction of b to treatment; add (1-τ) fraction of new arrivals
-        e = data[:β] + b                               # eligible inflow (eq.entry.inflow)
+        q = data[:β] + b                               # eligible inflow (eq.entry.inflow)
         xhalf1 = x[:, 1] + τ_c .* data[:β] - τ .* b   # + (1-τ)ξ - τb
-        xhalf3 = x[:, 3] + τ .* e                      # + τ(ξ + b)
+        xhalf3 = x[:, 3] + τ .* q                      # + τ(ξ + b)
     else
         throw(ArgumentError("mode must be :new, :existing, :both, or :uponentry, got $mode"))
     end
@@ -139,7 +144,7 @@ F(x, y, b, μ, data;
     # Construct full xhalf matrix (x̃)
     xhalf = hcat(xhalf1, xhalf2, xhalf3, xhalf4)
     
-    return x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b0, xhalf
+    return x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b0, xhalf, q
 end
 
 @doc """
@@ -384,7 +389,7 @@ function compute_Psi_discrete(data, μ; τ=zeros(data[:n]), p=ones(data[:n]), mo
 end
 
 Fc!(z, z₊, data; τ=zeros(data[:n]), p=ones(data[:n]), mode=:existing, validate=false) = begin
-    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b₀, xhalf = F(z.x, z.y, z.b, z.μ, data; τ=τ, p=p, mode=mode)
+    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b₀, xhalf, q₊ = F(z.x, z.y, z.b, z.μ, data; τ=τ, p=p, mode=mode)
     z₊.x[:, 1] .= x₊1
     z₊.x[:, 2] .= x₊2
     z₊.x[:, 3] .= x₊3
@@ -395,6 +400,7 @@ Fc!(z, z₊, data; τ=zeros(data[:n]), p=ones(data[:n]), mode=:existing, validat
     z₊.y[:, 4] .= y₊4
     z₊.b .= b₀
     z₊.tlx .= xhalf
+    z₊.q .= q₊
     z₊.μ = safe_ratio(sum(z₊.y), sum(z₊.x))
     # validate this using Ψ
     if validate

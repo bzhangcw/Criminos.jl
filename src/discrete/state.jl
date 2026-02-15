@@ -6,12 +6,14 @@ Base.@kwdef mutable struct State{R}
     y::Matrix{R}
     b::Vector{R}  # untreated returns (b₀)
     tlx::Matrix{R}  # intermediate population after treatment (x̃)
+    q::Vector{R}   # eligible inflow (q)
     μ::R
     n::Int
     function State(
         n::Int, x::Matrix{R}, y::Matrix{R}, μ::R;
         b::Vector{R}=zeros(R, n),
-        tlx::Matrix{R}=similar(x)
+        tlx::Matrix{R}=similar(x),
+        q::Vector{R}=zeros(R, n)
     ) where {R}
         this = new{R}()
         this.n = n
@@ -19,6 +21,7 @@ Base.@kwdef mutable struct State{R}
         this.y = y
         this.b = b
         this.tlx = tlx
+        this.q = q
         this.μ = μ
         return this
     end

@@ -23,6 +23,7 @@ export generate_random_data, compute_Psi_ct_composed
 export F, Fc!
 export State, randz, z_diff, get_x, get_y, safe_ratio
 export visualize_results, visualize_state, visualize_matrix, visualize_vector
+export get_policy_color
 
 
 function run(z₀, data;
@@ -34,7 +35,8 @@ function run(z₀, data;
     validate=false,
     func_traj=copy,
     keep_traj=false,
-    verbose_interval=20
+    verbose_interval=20,
+    accuracy=1e-6
 )
     n = data[:n]
     z = copy(z₀)
@@ -47,7 +49,7 @@ function run(z₀, data;
         ϵ = z_diff(z₊, z)
         z = z₊
         # @info "" z.x z.y z.μ
-        if (ϵ < 1e-6) || (t > max_iter)
+        if (ϵ < accuracy) || (t > max_iter)
             println("ϵ = $ϵ, convergence in $t steps")
             break
         end
