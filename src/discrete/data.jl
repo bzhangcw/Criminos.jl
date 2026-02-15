@@ -22,7 +22,7 @@ function generate_random_data(
     δ_inc::Float64=0.0,  # incarceration probability upon reoffense
     T_f::Float64=2100.0, # length of follow-up period
     λ_coeff::Float64=0.05,
-    style_λ::Symbol=:j_low_only,
+    style_λ::Symbol=:j_0_only,
     idiosyncrasy::AbstractIdiosyncrasy=GammaIdiosyncrasy(),  # default: Gamma frailty
 )
     jₘ, aₘ = dims # number of max rearrests, number of age groups
@@ -41,11 +41,15 @@ function generate_random_data(
     η = η_coeff * T_e # not strictly matching the fitting
     # arrivals per episode (rename to beta to avoid confusion with recidivism hazards)
     if style_λ == :uniform
-        β_arr = λ_coeff * ones(n) * T_e
-    elseif style_λ == :j_low_only
-        β_arr = λ_coeff * T_e .* [j <= 2 && a <= 3 ? 1.0 : 0.0 for (j, a) in V]
+        β_arr = λ_coeff * T_e .* [j <= 25 && a <= 2 ? 1.0 : 0.0 for (j, a) in V]
+    elseif style_λ == :j_0_only
+        β_arr = λ_coeff * T_e .* [j == 0 ? 1.0 : 0.0 for (j, a) in V]
     elseif style_λ == :j_high_only
         β_arr = λ_coeff * T_e .* [j >= 5 ? 1.0 : 0.0 for (j, a) in V]
+    elseif style_λ == :age_1_only
+        β_arr = λ_coeff * T_e .* [a == 1 ? 1.0 : 0.0 for (j, a) in V]
+    elseif style_λ == :special
+        β_arr = λ_coeff * T_e .* [j <= 10 && a <= 3 ? 1.0 : 0.0 for (j, a) in V]
     else
         error("Unknown style_λ: $style_λ. Use :uniform or :decreasing.")
     end

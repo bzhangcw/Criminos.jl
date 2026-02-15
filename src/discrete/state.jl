@@ -4,15 +4,21 @@
 Base.@kwdef mutable struct State{R}
     x::Matrix{R}
     y::Matrix{R}
+    b::Vector{R}  # untreated returns (b₀)
+    tlx::Matrix{R}  # intermediate population after treatment (x̃)
     μ::R
     n::Int
     function State(
-        n::Int, x::Matrix{R}, y::Matrix{R}, μ::R
+        n::Int, x::Matrix{R}, y::Matrix{R}, μ::R;
+        b::Vector{R}=zeros(R, n),
+        tlx::Matrix{R}=similar(x)
     ) where {R}
         this = new{R}()
         this.n = n
         this.x = x
         this.y = y
+        this.b = b
+        this.tlx = tlx
         this.μ = μ
         return this
     end
@@ -38,6 +44,23 @@ end
 
 function get_y(z::State)
     return [z.y[:, 1]; z.y[:, 2]; z.y[:, 3]; z.y[:, 4]]
+end
+
+randz(n; scale=50) = begin
+    x = zeros(n, 4)
+    x[:, 1] = rand(n) .* scale
+    x[:, 2] = zeros(n)
+    x[:, 3] = rand(n) .* scale
+    x[:, 4] = zeros(n)
+    # ---------------------------
+    y = zeros(n, 4)
+    y[:, 1] = rand(n) .* x[:, 1]
+    y[:, 2] = rand(n) .* x[:, 2]
+    y[:, 3] = rand(n) .* x[:, 3]
+    y[:, 4] = rand(n) .* x[:, 4]
+    # ---------------------------
+    μ = sum(y) / sum(x)
+    return State(n, x, y, μ)
 end
 
 
@@ -105,7 +128,7 @@ function visualize_state(z::State, data)
                 term=term,
                 treated=treated,
                 x=x_vec[offset+i],
-                y=y_vec[offset+i]
+                y=y_vec[offset+i],
             ))
         end
     end

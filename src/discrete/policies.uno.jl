@@ -18,8 +18,10 @@ function __policy_opt_sd_uno(z, data, C, ϕ, p; obj_style=1)
     # x, and y
     @variable(m, xv[1:n, 1:4] >= 0) # x
     @variable(m, yv[1:n, 1:4] >= 0)
+    @variable(m, bv[1:n] >= 0)      # b (untreated returns)
     @constraint(m, cap, sum(xv[:, 3]) <= C)
-    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(xv, yv, sum(yv) / (sum(xv) + 1e-5), data; τ=τv, p=p)
+    μv = sum(yv) / (sum(xv) + 1e-5)
+    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, b₀, xhalf = F(xv, yv, bv, μv, data; τ=τv, p=p)
 
     # fixed point constraints.
     @constraint(m, xv[:, 1] .== x₊1)
@@ -30,6 +32,7 @@ function __policy_opt_sd_uno(z, data, C, ϕ, p; obj_style=1)
     @constraint(m, yv[:, 2] .== y₊2)
     @constraint(m, yv[:, 3] .== y₊3)
     @constraint(m, yv[:, 4] .== y₊4)
+    @constraint(m, bv .== b₀)  # b fixed point
     if obj_style == 1
         @objective(m, Min, sum(yv))
     elseif obj_style == 2
@@ -39,8 +42,9 @@ function __policy_opt_sd_uno(z, data, C, ϕ, p; obj_style=1)
     τ₊ = value.(τv)
     x₊ = value.(xv)
     y₊ = value.(yv)
+    b₊ = value.(bv)
     μ₊ = safe_ratio(sum(y₊), sum(x₊))
-    return τ₊, y₊, State(n, x₊, y₊, μ₊), nothing
+    return τ₊, y₊, State(n, x₊, y₊, μ₊; b=b₊), nothing
 end
 
 
@@ -57,7 +61,7 @@ function __policy_opt_myopic_uno(z, data, C, ϕ, p; obj_style=1, verbose=false)
     @variable(m, τv[1:n] >= 0)
     set_upper_bound.(τv, 1.0)
     # one-step lookahead
-    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(z.x, z.y, z.μ, data; τ=τv, p=p)
+    x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4, _, _ = F(z.x, z.y, z.b, z.μ, data; τ=τv, p=p)
     @constraint(m, cap, sum(x₊3) <= C)
 
     if obj_style == 1

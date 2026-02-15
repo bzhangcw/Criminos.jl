@@ -1,53 +1,3 @@
-using JuMP, MadNLP
-using ForwardDiff, Optim
-
-__optim_ipnewton = IPNewton(;
-    linesearch=Optim.backtrack_constrained_grad,
-    μ0=:auto,
-    show_linesearch=false
-)
-
-__get_options(tol=1e-4, verbose=true, store_trace=true) = Optim.Options(
-    f_abstol=tol,
-    g_abstol=tol,
-    iterations=1_000,
-    store_trace=store_trace,
-    show_trace=verbose,
-    show_every=5,
-    time_limit=100
-)
-
-function __policy_opt_grad_fp(z, data, C, ϕ, p; μ=1e-8, kwargs...)
-    n = data[:n]
-
-    f(zv) = begin
-        xv = reshape(zv[1:4n], n, 4)
-        yv = reshape(zv[4n+1:8n], n, 4)
-        τv = zv[8n+1:9n]
-        x₊1, x₊2, x₊3, x₊4, y₊1, y₊2, y₊3, y₊4 = F(xv, yv, sum(yv) / (sum(xv) + 1e-5), data; τ=τv, p=p)
-        return sum(y₊1) + sum(y₊2) + sum(y₊3) + sum(y₊4) - μ * log(C - sum(x₊3))
-    end
-
-    ∇f!(buffer, zv) = ForwardDiff.gradient!(buffer, f, zv)
-
-    lb = zeros(9n)
-    ub = ones(9n) .* 1e10
-    z₀ = ones(9n) .* 1e-2
-
-    results = Optim.optimize(f, ∇f!, lb, ub, z₀, Optim.Fminbox(Optim.ConjugateGradient()), __get_options())
-
-    zs = results.minimizer
-    τ₊ = zs[8n+1:9n]
-    z₊ = copy(z)
-    Fc!(z, z₊, data; τ=τ₊, p=p)
-
-    x₊ = z₊.x
-    y₊ = z₊.y
-    μ₊ = z₊.μ
-    return τ₊, y₊, State(n, x₊, y₊, μ₊), nothing
-end
-
-
 @doc """
     __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, mode=:existing)
 
@@ -64,6 +14,7 @@ capacity C is exhausted. The capacity constraint is on the treated population in
 - mode=:existing: treatment applies to existing p0 only, capacity = x[v, 1]
 - mode=:new: treatment applies to new arrivals only, capacity = β[v]
 - mode=:both: treatment applies to both, capacity = x[v, 1] + β[v]
+- mode=:uponentry: treatment upon entry, capacity = β[v] + b[v] (eligible inflow)
 
 The algorithm greedily assigns τ[v] = 1 until adding another cohort would exceed C.
 """
@@ -106,14 +57,18 @@ function __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, as
         end
 
         # Capacity consumed if we treat cohort v (depends on mode):
-        if mode == :existing
-            capacity_needed = z.x[v, 1]  # existing p0 only
-        elseif mode == :new
+        if mode == :new
             capacity_needed = data[:β][v]  # new arrivals only
+        elseif mode == :existing
+            @warn "mode == :existing is not recommended, because it allows treatment in mid-of-probation"
+            capacity_needed = z.x[v, 1]  # existing p0 only
         elseif mode == :both
+            @warn "mode == :both is not recommended, because it allows treatment in mid-of-probation"
             capacity_needed = z.x[v, 1] + data[:β][v]  # both
+        elseif mode == :uponentry
+            capacity_needed = z.b[v] + data[:β][v]  # eligible inflow (arrivals + untreated returns)
         else
-            throw(ArgumentError("mode must be :existing, :new, or :both, got $mode"))
+            throw(ArgumentError("mode must be :existing, :new, :both, or :uponentry, got $mode"))
         end
 
         if capacity_needed <= 1e-10

@@ -11,7 +11,7 @@ include("discrete/state.jl")
 include("discrete/idiosyncrasy.jl")        # base interface + constant idiosyncrasy
 include("discrete/idiosyncrasy_gamma.jl")  # Gamma frailty (GL quadrature)
 include("discrete/routing.jl")
-include("discrete/datarec.jl")
+include("discrete/data.jl")
 include("discrete/fixedpoint.jl")
 include("continuous/fixp2cont.jl")
 
