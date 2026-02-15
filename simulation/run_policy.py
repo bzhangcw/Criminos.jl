@@ -29,8 +29,11 @@ import simulation, sirakaya
 
 # Import what we need from simulation_setup
 from simulation_setup import (
-    SimulationSetup, get_tests, default_settings,
-    QUAL_STRING_ANYTIME, QUAL_STRING_ENTRY_ONLY,
+    SimulationSetup,
+    get_tests,
+    default_settings,
+    QUAL_STRING_ANYTIME,
+    QUAL_STRING_ENTRY_ONLY,
 )
 from simulation_summary import *
 import simulation_treatment as smt
@@ -139,18 +142,20 @@ def create_parser():
         default=default_settings.max_returns,
         help="Maximum number of returns allowed",
     )
+
+    treat_group.add_argument(
+        "--max_offenses",
+        type=int,
+        default=default_settings.max_offenses,
+        help="Maximum number of offenses to track",
+    )
+
     treat_group.add_argument(
         "--treatment_timing",
         type=str,
         choices=["upon_arrival", "anytime"],
         default=default_settings.treatment_timing,
         help="When treatment can be assigned: 'upon_arrival' (only at entry to probation) or 'anytime' (during probation)",
-    )
-    treat_group.add_argument(
-        "--max_offenses",
-        type=int,
-        default=default_settings.max_offenses,
-        help="Maximum number of offenses to track",
     )
 
     # Boolean flags
@@ -338,7 +343,8 @@ if __name__ == "__main__":
     # Set treatment timing mode
     settings.treatment_timing = args.treatment_timing
     settings.str_qualifying_for_treatment = (
-        QUAL_STRING_ENTRY_ONLY if args.treatment_timing == "upon_arrival"
+        QUAL_STRING_ENTRY_ONLY
+        if args.treatment_timing == "upon_arrival"
         else QUAL_STRING_ANYTIME
     )
 

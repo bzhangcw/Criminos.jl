@@ -184,7 +184,7 @@ class SimulationSetup:
         print(f"  communities:       {self.communities}")
         print(f"  initial pop:       {len(self.dfpop0)} individuals")
         print(f"  available pool:    {len(self.dfi)} individuals")
-        print(self.dfi[["age", "age_dist", "weight"]].head(5))
+        print(self.dfi[["age", "age_dist", "weight", "prison_rate"]].head(5))
         print("-" * 60)
         print("State Space:")
         print(f"  dimensions:        {state_dims}")

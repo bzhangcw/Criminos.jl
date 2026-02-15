@@ -2,13 +2,14 @@ repeat=$1
 start=$2
 output=$3
 effect=$4
-
-echo "useage: run_all_params.zsh <repeat> <start> <output> <effect>"
+allowrtn=$5
+echo "useage: run_all_params.zsh <repeat> <start> <output> <effect> <allowrtn>"
 echo " |- repeat: number of repeats"
 echo " |-  start: starting repeation number"
 echo " |- output: output directory"
 echo " |- effect: treatment effect"
-echo "Generating commands for $repeat repeats starting from repeation number $start with treatment effect $effect"
+echo " |- allowrtn: whether to allow returning individuals to be treated"
+echo "Generating commands for $repeat repeats \n\t starting from $start with effect $effect\n\t and allowrtn $allowrtn"
 
 # policies=(null random high-risk low-risk high-risk-only-young age-first age-tolerance)
 # policies=(high-risk age-tolerance high-risk-only-young)
@@ -18,8 +19,13 @@ policies=(null high-risk low-risk age-first)
 # policies=(null high-risk low-risk age-first)
 # policies=(age-first-high-risk)
 
-scale_factors=(0.05 0.1 0.2 0.3 0.4 0.5 0.7 0.9 1.0)
-term_lengths=(500 1000 1500 2000)
+# normal
+# scale_factors=(0.05 0.1 0.2 0.3 0.4 0.5 0.7 0.9 1.0)
+# very large
+scale_factors=(0.05 0.2 0.4 0.9 2.0 4.0 8.0 9.0)
+# term_lengths=(500 1000 1500 2000)
+# term_lengths=(365 730 1000 2000)
+term_lengths=(365 730)
 # term_lengths=(1000)
 
 
@@ -51,6 +57,7 @@ for ((k=$start; k<$start+$repeat; k++)); do
     --rel_off_probation ${term_length} \
     --treatment_capacity 80 \
     --treatment_effect $effect \
+    --bool_return_can_be_treated $allowrtn \
     $policy 1 $k $outd &> $outd/logs/${policy}_${k}_${nm}.log " >> $output/cmd.sh
       done
     done
