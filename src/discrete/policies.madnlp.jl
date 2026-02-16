@@ -138,9 +138,9 @@ function __policy_opt_sd_madnlp_adnlp(z, data, C, ϕ, p; obj_style=1, verbose=tr
     # post processing
     # compute qualified inflow 
     if mode == :new
-        q₊ = data[:β]
+        q₊ = data[:e]
     elseif mode == :uponentry
-        q₊ = data[:β] + b₊
+        q₊ = data[:e] + b₊
     else
         throw(ArgumentError("mode must be :new, :uponentry, got $mode"))
     end
@@ -212,7 +212,7 @@ function __policy_opt_sd_madnlp_jump(z, data, C, ϕ, p; obj_style=1)
     μ₊ = safe_ratio(sum(y₊), sum(x₊))
 
     # Note: this deprecated function doesn't support mode parameter, assume :new
-    q₊ = data[:β]
+    q₊ = data[:e]
 
     return τ₊, y₊, State(n, x₊, y₊, μ₊; b=b₊, q=q₊), nothing
 end

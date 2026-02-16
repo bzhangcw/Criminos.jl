@@ -12,7 +12,8 @@ import Criminos as CR
 
 # Load LaTeX label definitions
 include("jl-tex.jl")
-include("../plot.jl")
+include("plot.jl")
+include("jl-test-mdp.jl")
 pgfplotsx()
 
 bool_init = true
@@ -21,7 +22,7 @@ bool_run_sd = false
 
 if bool_init
     Δ = 100.0
-    ϵₒ = 1e-4
+    ϵₒ = 1e-10
     # ------------------------------------------------------------
     # size of the problem
     # choose from :small, :real
@@ -29,16 +30,16 @@ if bool_init
     sz = :real
     # treatment mode
     # choose from [:existing, :new, :both, uponentry]
-    mode = :uponentry
-    # mode = :new
+    mode = :new
+    # mode = :uponentry
     # ------------------------------------------------------------
     # arrival rate pattern
     # choose from :uniform, :j_0_only, :j_high_only
-    # style_λ = :age_1_only
+    style_λ = :age_1_only
     # style_λ = :j_0_only
     # style_λ = :uniform
     # style_λ = :j_low_only
-    style_λ = :special
+    # style_λ = :special
     # ------------------------------------------------------------
     # idiosyncrasy
     idiosyncrasy = CR.ConstantIdiosyncrasy(2.6 / 2.05)
@@ -57,7 +58,7 @@ if bool_init
     # ------------------------------------------------------------
     data = CR.generate_random_data(
         (j_max, a_max), Δ;
-        δ_inc=0.08, T_f=3000.0, λ_coeff=0.1,
+        δ_inc=0.08, T_f=2000.0, λ_coeff=0.5,
         style_λ=style_λ,
         idiosyncrasy=idiosyncrasy
     )
@@ -78,6 +79,7 @@ using Statistics
 
 if bool_run
     delta_inc_values = [0.0:0.01:0.15..., 0.15:0.15:1.0...]
+    # delta_inc_values = [0.0:0.01:0.05...]
     n_delta = length(delta_inc_values)
 
     τ_sd_results = zeros(n, n_delta)
@@ -98,8 +100,17 @@ if bool_run
         data[:δ_inc] = δ_inc
 
         # Define policy functions for this configuration
-        fτ_hr = (z) -> CR.__policy_opt_priority(z, data, C, ϕ, p₁; obj_style=1, verbose=false, ascending=false, mode=mode)
-        fτ_lr = (z) -> CR.__policy_opt_priority(z, data, C, ϕ, p₁; obj_style=1, verbose=false, ascending=true, mode=mode)
+        fτ_hr = (z) -> CR.__policy_opt_priority(
+            z, data, C, ϕ, p₁;
+            obj_style=1, verbose=false,
+            ascending=false,
+            mode=mode
+        )
+        fτ_lr = (z) -> CR.__policy_opt_priority(
+            z, data, C, ϕ, p₁; obj_style=1, verbose=false,
+            ascending=true,
+            mode=mode
+        )
         fτ_null = (z) -> zeros(n)
 
 
@@ -165,8 +176,13 @@ if bool_run
             # Add steady-state policy if enabled
             if bool_run_sd
                 τ_sd = τ_sd_results[:, i]
+
+                # Compute AD gradient at steady state
+                # gradients_sd = compute_path_gradient(z_sd_final[i], data; p=p₁, mode=mode)
+                gradients_sd = compute_path_gradient(z_sd_final[i], data; p=p₁)
+
                 df_sd = visualize_results(z_sd_final[i], τ_sd, data)
-                fig_sd = plot_tau_heatmap(df_sd, figsize=(data[:jₘ] * 100, data[:aₘ] * 100))
+                fig_sd = plot_tau_heatmap(df_sd, figsize=(data[:jₘ] * 100, data[:aₘ] * 100), gradients=gradients_sd)
                 save("$output_dir/fig_tau_heat_sd_$(δ_inc).pdf", fig_sd)
 
                 push!(policies, (df_sd, "steady-state"))

@@ -9,7 +9,8 @@ using Criminos
 using DataFrames
 using LaTeXStrings
 import Criminos as CR
-include("../plot.jl")
+include("plot.jl")
+include("jl-test-mdp.jl")
 pgfplotsx()
 
 
@@ -20,9 +21,13 @@ z₀_rep = randz(n)
 for (i, C) in enumerate(capacity_values)
     τ_sd = τ_sd_results[:, i]
     z_sd = z_sd_final[i]
+    
+    # Compute path gradient using automatic differentiation at steady state
+    gradients = compute_path_gradient_ad(z_sd, data; p=p₁, mode=mode)
+    
     # Heatmap: τ (treatment rate) by j (score) and a (age)
     df = visualize_results(z_sd, τ_sd, data)
-    fig = plot_tau_heatmap(df, figsize=(data[:jₘ] * 100, data[:aₘ] * 100))
+    fig = plot_tau_heatmap(df, figsize=(data[:jₘ] * 100, data[:aₘ] * 100), gradients=gradients)
 
     save("/tmp/fig_sd_$(C).pdf", fig)
 end

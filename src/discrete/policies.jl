@@ -58,15 +58,15 @@ function __policy_opt_priority(z, data, C, ϕ, p; obj_style=1, verbose=false, as
 
         # Capacity consumed if we treat cohort v (depends on mode):
         if mode == :new
-            capacity_needed = data[:β][v]  # new arrivals only
+            capacity_needed = data[:e][v]  # new arrivals only
         elseif mode == :existing
             @warn "mode == :existing is not recommended, because it allows treatment in mid-of-probation"
             capacity_needed = z.x[v, 1]  # existing p0 only
         elseif mode == :both
             @warn "mode == :both is not recommended, because it allows treatment in mid-of-probation"
-            capacity_needed = z.x[v, 1] + data[:β][v]  # both
+            capacity_needed = z.x[v, 1] + data[:e][v]  # both
         elseif mode == :uponentry
-            capacity_needed = z.b[v] + data[:β][v]  # eligible inflow (arrivals + untreated returns)
+            capacity_needed = z.b[v] + data[:e][v]  # eligible inflow (arrivals + untreated returns)
         else
             throw(ArgumentError("mode must be :existing, :new, :both, or :uponentry, got $mode"))
         end
